@@ -192,6 +192,14 @@ const SKILLS = {
   ultimate: { damage: 70, color: 0xffaa00, size: 0.15, duration: 700, flash: true,  shake: true  },
 };
 
+const TYPE_COLORS = {
+  fire:      { primary: '#ff4400', secondary: '#ff8800', glow: '#ff440066' },
+  ice:       { primary: '#0099ff', secondary: '#66ccff', glow: '#0099ff66' },
+  lightning: { primary: '#ffdd00', secondary: '#ffee66', glow: '#ffdd0066' },
+  shadow:    { primary: '#9933ff', secondary: '#cc66ff', glow: '#9933ff66' },
+  nature:    { primary: '#00cc44', secondary: '#66ff88', glow: '#00cc4466' },
+};
+
 const MAX_HP       = 100;
 const ENEMY_SKILL  = 'ice';
 const ENEMY_DELAY  = 1500;   // ms before enemy auto-fires
@@ -241,6 +249,132 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
 const dLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dLight.position.set(0, 5, 5);
 scene.add(dLight);
+
+/* ==========================================================
+   CARD CANVAS RENDERING
+   ========================================================== */
+const CARD_W = 512, CARD_H = 768;
+
+function drawHPBar(ctx, canvasW, y, hp, maxHP) {
+  const barW = canvasW - 80, barH = 18, x = 40;
+  const pct = Math.max(0, hp / maxHP);
+  // Track
+  ctx.fillStyle = '#333';
+  ctx.beginPath(); ctx.roundRect(x, y, barW, barH, 9); ctx.fill();
+  // Fill
+  if (pct > 0) {
+    ctx.fillStyle = pct > 0.3 ? '#00cc44' : '#ff3333';
+    ctx.beginPath(); ctx.roundRect(x, y, barW * pct, barH, 9); ctx.fill();
+  }
+  // Text
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${Math.max(0, hp)} / ${maxHP}`, canvasW / 2, y + 14);
+}
+
+function renderCardCanvas(monster, portraitImg) {
+  const c = document.createElement('canvas');
+  c.width = CARD_W; c.height = CARD_H;
+  const ctx = c.getContext('2d');
+  const tc = TYPE_COLORS[monster.type] || TYPE_COLORS.fire;
+
+  // Background
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+
+  // Element-colored border
+  ctx.strokeStyle = tc.primary;
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.roundRect(6, 6, CARD_W - 12, CARD_H - 12, 16); ctx.stroke();
+
+  // Portrait area (top half)
+  const portY = 24, portH = 340, portW = CARD_W - 48, portX = 24;
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(portX, portY, portW, portH, 12); ctx.clip();
+  if (portraitImg) {
+    // Center-crop the portrait
+    const imgAspect = portraitImg.width / portraitImg.height;
+    const boxAspect = portW / portH;
+    let sx = 0, sy = 0, sw = portraitImg.width, sh = portraitImg.height;
+    if (imgAspect > boxAspect) {
+      sw = portraitImg.height * boxAspect;
+      sx = (portraitImg.width - sw) / 2;
+    } else {
+      sh = portraitImg.width / boxAspect;
+      sy = (portraitImg.height - sh) / 2;
+    }
+    ctx.drawImage(portraitImg, sx, sy, sw, sh, portX, portY, portW, portH);
+  } else {
+    // Gradient placeholder in element color
+    const grad = ctx.createLinearGradient(portX, portY, portX, portY + portH);
+    grad.addColorStop(0, tc.primary + '44');
+    grad.addColorStop(1, '#111');
+    ctx.fillStyle = grad;
+    ctx.fillRect(portX, portY, portW, portH);
+    ctx.fillStyle = tc.primary + '66';
+    ctx.font = 'bold 48px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('?', CARD_W / 2, portY + portH / 2 + 16);
+  }
+  // Vignette fade at bottom of portrait
+  const vig = ctx.createLinearGradient(0, portY + portH - 80, 0, portY + portH);
+  vig.addColorStop(0, 'rgba(17,17,17,0)');
+  vig.addColorStop(1, 'rgba(17,17,17,1)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(portX, portY + portH - 80, portW, 80);
+  ctx.restore();
+
+  // Name
+  let textY = portY + portH + 28;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(monster.name, CARD_W / 2, textY);
+
+  // Type badge
+  textY += 22;
+  ctx.fillStyle = tc.primary;
+  ctx.font = 'bold 14px system-ui, sans-serif';
+  ctx.fillText(monster.type.toUpperCase(), CARD_W / 2, textY);
+
+  // Skill columns
+  textY += 28;
+  const skills = monster.skills || [];
+  for (let i = 0; i < skills.length; i++) {
+    const sk = skills[i];
+    const skY = textY + i * 28;
+    // Colored dot
+    ctx.fillStyle = sk.color || tc.primary;
+    ctx.beginPath(); ctx.arc(60, skY - 4, 5, 0, Math.PI * 2); ctx.fill();
+    // Name
+    ctx.fillStyle = '#ccc';
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    const label = i === 2 ? sk.name + ' \u2605' : sk.name;
+    ctx.fillText(label, 74, skY);
+  }
+
+  // HP bar
+  const hpY = CARD_H - 50;
+  drawHPBar(ctx, CARD_W, hpY, monster.hp, monster.maxHP);
+
+  return c;
+}
+
+function makeGlowCanvas(type) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const tc = TYPE_COLORS[type] || TYPE_COLORS.fire;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, tc.glow);
+  grad.addColorStop(1, 'transparent');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return c;
+}
 
 /* ==========================================================
    MONSTER CREATION
