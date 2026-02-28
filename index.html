@@ -1464,9 +1464,13 @@ async function init() {
       bob(p2CardGroup, now / 1000);
 
       // Sprite animation tick
-      const dt = 1 / 60; // approximate — good enough for sprite FPS
+      const dt = 1 / 60;
       if (p1Animator) p1Animator.tick(dt);
       if (p2Animator) p2Animator.tick(dt);
+
+      // Force canvas texture re-upload every frame (workaround for mobile WebGL)
+      if (p1CardGroup?.userData.cardTex) p1CardGroup.userData.cardTex.needsUpdate = true;
+      if (p2CardGroup?.userData.cardTex) p2CardGroup.userData.cardTex.needsUpdate = true;
 
       if (p1Tracked && p2Tracked && started && !cardsLocked) cachePositions();
 
