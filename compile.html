@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Awakards — Compile .mind Targets</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; color: #fff; font-family: system-ui, sans-serif; padding: 24px; }
+    h1 { font-size: 20px; margin-bottom: 8px; color: #ffaa00; }
+    .info { color: #888; font-size: 13px; margin-bottom: 24px; }
+    #previews { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    #previews canvas { border: 1px solid #333; border-radius: 8px; }
+    #log { background: #0a0a0a; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #6f6; min-height: 120px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; }
+    button { background: #ffaa00; color: #000; border: none; padding: 12px 24px; border-radius: 10px; font-weight: 700; font-size: 14px; cursor: pointer; margin-bottom: 16px; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    a { color: #ffaa00; }
+  </style>
+</head>
+<body>
+
+<h1>Compile .mind Targets</h1>
+<p class="info">
+  Generates 5 high-contrast card images and compiles them into <code>targets.mind</code>.<br>
+  Target order: 0=P1 Monster, 1=P2 Monster, 2=Basic Attack, 3=Special Attack, 4=Ultimate Attack
+</p>
+
+<button id="compile-btn">Generate & Compile</button>
+<div id="previews"></div>
+<div id="log"></div>
+
+<script type="module">
+import { Compiler } from 'https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js';
+
+const CARDS = [
+  { label: 'P1 MONSTER',     bg: '#1a3a1a', fg: '#00ff66', shape: 'diamond',  pattern: 'crosshatch' },
+  { label: 'P2 MONSTER',     bg: '#1a1a3a', fg: '#6688ff', shape: 'hexagon',  pattern: 'dots' },
+  { label: 'BASIC ATTACK',   bg: '#3a2a1a', fg: '#ff8800', shape: 'triangle', pattern: 'stripes' },
+  { label: 'SPECIAL ATTACK', bg: '#1a2a3a', fg: '#00ccff', shape: 'star',     pattern: 'zigzag' },
+  { label: 'ULTIMATE',       bg: '#3a1a2a', fg: '#ff44aa', shape: 'burst',    pattern: 'grid' },
+];
+
+const W = 400, H = 560;
+
+function drawCard(card) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+
+  ctx.fillStyle = card.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Pattern fill for tracking features
+  ctx.strokeStyle = card.fg + '33';
+  ctx.lineWidth = 1;
+  switch (card.pattern) {
+    case 'crosshatch':
+      for (let i = -H; i < W + H; i += 18) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + H, H); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(i + H, 0); ctx.lineTo(i, H); ctx.stroke();
+      }
+      break;
+    case 'dots':
+      for (let y = 10; y < H; y += 20)
+        for (let x = 10 + (y % 40 === 10 ? 0 : 10); x < W; x += 20) {
+          ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.stroke();
+        }
+      break;
+    case 'stripes':
+      for (let i = -H; i < W + H; i += 14) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + H, H); ctx.stroke();
+      }
+      break;
+    case 'zigzag':
+      for (let y = 0; y < H; y += 24) {
+        ctx.beginPath();
+        for (let x = 0; x < W; x += 12) ctx.lineTo(x, y + (x % 24 < 12 ? 0 : 12));
+        ctx.stroke();
+      }
+      break;
+    case 'grid':
+      for (let x = 0; x < W; x += 16) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+      for (let y = 0; y < H; y += 16) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+      break;
+  }
+
+  // Borders
+  ctx.strokeStyle = card.fg;
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.roundRect(8, 8, W - 16, H - 16, 16); ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = card.fg + '88';
+  ctx.beginPath(); ctx.roundRect(18, 18, W - 36, H - 36, 12); ctx.stroke();
+
+  // Center shape
+  const cx = W / 2, cy = H / 2 - 20;
+  ctx.fillStyle = card.fg;
+  ctx.lineWidth = 3;
+  switch (card.shape) {
+    case 'diamond':
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 80); ctx.lineTo(cx + 60, cy);
+      ctx.lineTo(cx, cy + 80); ctx.lineTo(cx - 60, cy);
+      ctx.closePath(); ctx.fill(); break;
+    case 'hexagon':
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 3 * i - Math.PI / 6;
+        ctx.lineTo(cx + 70 * Math.cos(a), cy + 70 * Math.sin(a));
+      }
+      ctx.closePath(); ctx.fill(); break;
+    case 'triangle':
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 80); ctx.lineTo(cx + 70, cy + 50); ctx.lineTo(cx - 70, cy + 50);
+      ctx.closePath(); ctx.fill(); break;
+    case 'star':
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = Math.PI / 5 * i - Math.PI / 2;
+        ctx.lineTo(cx + (i % 2 === 0 ? 70 : 30) * Math.cos(a), cy + (i % 2 === 0 ? 70 : 30) * Math.sin(a));
+      }
+      ctx.closePath(); ctx.fill(); break;
+    case 'burst':
+      ctx.beginPath();
+      for (let i = 0; i < 16; i++) {
+        const a = Math.PI / 8 * i - Math.PI / 2;
+        ctx.lineTo(cx + (i % 2 === 0 ? 75 : 35) * Math.cos(a), cy + (i % 2 === 0 ? 75 : 35) * Math.sin(a));
+      }
+      ctx.closePath(); ctx.fill(); break;
+  }
+
+  // Corner markers
+  ctx.fillStyle = card.fg + 'cc';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(card.label[0] + card.label[1], 28, 42);
+  ctx.textAlign = 'right';
+  ctx.fillText(card.label[0] + card.label[1], W - 28, H - 26);
+
+  // Label
+  ctx.fillStyle = card.fg;
+  ctx.font = 'bold 28px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(card.label, cx, H - 60);
+
+  ctx.font = '11px monospace';
+  ctx.fillStyle = card.fg + '66';
+  ctx.fillText('AWK-' + card.shape.toUpperCase(), cx, H - 38);
+
+  return c;
+}
+
+const logEl = document.getElementById('log');
+function log(msg) {
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+document.getElementById('compile-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('compile-btn');
+  btn.disabled = true;
+  document.getElementById('previews').replaceChildren();
+  logEl.textContent = '';
+
+  log('Generating 5 card images...');
+  const canvases = CARDS.map((card, i) => {
+    const c = drawCard(card);
+    const preview = document.createElement('canvas');
+    preview.width = 120; preview.height = 168;
+    preview.title = `Target ${i}: ${card.label}`;
+    preview.getContext('2d').drawImage(c, 0, 0, 120, 168);
+    document.getElementById('previews').appendChild(preview);
+    log(`  [${i}] ${card.label} — ${W}x${H}`);
+    return c;
+  });
+
+  log('\nConverting to ImageBitmap...');
+  const images = [];
+  for (const c of canvases) {
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    images.push(await createImageBitmap(blob));
+  }
+  log(`  ${images.length} images ready`);
+
+  log('\nCompiling .mind file (this takes 30-60s)...');
+  try {
+    const compiler = new Compiler();
+    await compiler.compileImageTargets(images, (progress) => {
+      log(`  Progress: ${(progress * 100).toFixed(0)}%`);
+    });
+    log('Compilation complete! Exporting...');
+
+    const buffer = await compiler.exportData();
+    const blob = new Blob([buffer]);
+    log(`  .mind file size: ${(blob.size / 1024).toFixed(1)} KB`);
+
+    // Download .mind
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'targets.mind';
+    a.textContent = 'Download targets.mind';
+    a.style.cssText = 'display:block;margin-top:12px;color:#ffaa00;font-size:16px;font-weight:700;';
+    logEl.after(a);
+    a.click();
+    log('\nDone! targets.mind downloaded.');
+
+    // Download individual PNGs
+    log('\nDownloading individual card PNGs...');
+    const names = ['p1-monster', 'p2-monster', 'basic-attack', 'special-attack', 'ultimate-attack'];
+    for (let i = 0; i < canvases.length; i++) {
+      const pngBlob = await new Promise(r => canvases[i].toBlob(r, 'image/png'));
+      const pngUrl = URL.createObjectURL(pngBlob);
+      const dl = document.createElement('a');
+      dl.href = pngUrl; dl.download = names[i] + '.png';
+      dl.click();
+      URL.revokeObjectURL(pngUrl);
+      log(`  Downloaded ${names[i]}.png`);
+    }
+  } catch (err) {
+    log('\nERROR: ' + err.message);
+    console.error(err);
+  }
+
+  btn.disabled = false;
+});
+</script>
+</body>
+</html>
