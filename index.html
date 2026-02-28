@@ -350,16 +350,28 @@ async function runDemoScript() {
     return;
   }
 
-  const p1s = DEMO_MONSTERS.p1.skills;
-  const p2s = DEMO_MONSTERS.p2.skills;
-  await sleep(600);
-  await attackFromAbilityCard({ tier: 'basic', name: p1s[0].name, damage: p1s[0].damage });
-  await waitForCondition(() => !busy && !over && currentPlayer === 2, 5000);
-  await sleep(600);
-  await attackFromAbilityCard({ tier: 'special', name: p2s[1].name, damage: p2s[1].damage });
-  await waitForCondition(() => !busy && !over && currentPlayer === 1, 5000);
-  await sleep(600);
-  await attackFromAbilityCard({ tier: 'ultimate', name: p1s[2].name, damage: p1s[2].damage });
+  // Scripted fight sequence — alternates attacks until KO
+  const script = [
+    { p: 'p1', slot: 0 },  // P1 basic
+    { p: 'p2', slot: 1 },  // P2 special
+    { p: 'p1', slot: 2 },  // P1 ultimate
+    { p: 'p2', slot: 0 },  // P2 basic
+    { p: 'p1', slot: 1 },  // P1 special
+    { p: 'p2', slot: 2 },  // P2 ultimate
+    { p: 'p1', slot: 0 },  // P1 basic (cleanup)
+    { p: 'p2', slot: 1 },  // P2 special (cleanup)
+  ];
+  const tiers = ['basic', 'special', 'ultimate'];
+
+  for (const step of script) {
+    const expectedPlayer = step.p === 'p1' ? 1 : 2;
+    const ok = await waitForCondition(() => !busy && !over && currentPlayer === expectedPlayer, 5000);
+    if (!ok || over) break;
+    await sleep(800);
+    const monster = step.p === 'p1' ? DEMO_MONSTERS.p1 : DEMO_MONSTERS.p2;
+    const sk = monster.skills[step.slot];
+    await attackFromAbilityCard({ tier: tiers[step.slot], name: sk.name, damage: sk.damage });
+  }
 
   demoScriptRunning = false;
 }
@@ -407,6 +419,10 @@ playAgainBtn.addEventListener('click', () => {
     cg.userData.alive = true;
     updateCardHP(cg, MAX_HP);
   });
+
+  // Reset sprite animators to idle
+  if (p1Animator) p1Animator.play('idle');
+  if (p2Animator) p2Animator.play('idle');
 
   if (wasDemo) {
     // Re-run demo — cards go back into scene at fixed positions
@@ -637,10 +653,26 @@ function makeCardGroup(monsterData, portraitImg) {
   const cardPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.9), cardMat);
   group.add(cardPlane);
 
+  // Sprite overlay (positioned over portrait area of card)
+  // Portrait region: y=24..364 on 768h canvas → normalized: top=0.953, bottom=0.526
+  // Card plane is 0.6 x 0.9. Portrait occupies ~44% of card height, top portion.
+  const spriteH = 0.9 * (340 / 768);  // ~0.399
+  const spriteW = 0.6 * (464 / 512);  // ~0.544
+  const spriteMat = new THREE.MeshBasicMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const spritePlane = new THREE.Mesh(new THREE.PlaneGeometry(spriteW, spriteH), spriteMat);
+  // Center of portrait in card coords: y offset from card center
+  // Card center is 0. Portrait center at (24+170)/768 = 0.253 from top → 0.494 from center (in normalized)
+  // In world: 0.9 * (0.5 - 0.253) = 0.222
+  spritePlane.position.y = 0.222;
+  spritePlane.position.z = 0.002; // slightly in front of card
+  group.add(spritePlane);
+
   group.userData = {
     alive: true,
     cardCanvas, cardTex, cardMat, cardPlane,
-    glowPlane, glowMat,
+    glowPlane, glowMat, spritePlane, spriteMat,
     monsterData, portraitImg,
   };
 
@@ -655,6 +687,97 @@ function updateCardHP(cardGroup, currentHP) {
   ud.cardTex.image = newCanvas;
   ud.cardTex.needsUpdate = true;
 }
+
+/* ==========================================================
+   SPRITE ANIMATOR
+   ========================================================== */
+class SpriteAnimator {
+  constructor(material, sequences, fps = 10) {
+    this.mat = material;           // MeshBasicMaterial with .map
+    this.sequences = sequences;    // { idle: [tex,...], cast: [...], hit: [...] }
+    this.fps = fps;
+    this.current = 'idle';
+    this.frame = 0;
+    this.elapsed = 0;
+    this.loop = true;
+    this.onComplete = null;
+    this.playing = true;
+    if (sequences.idle?.length) {
+      this.mat.map = sequences.idle[0];
+      this.mat.needsUpdate = true;
+    }
+  }
+
+  play(name, { loop = true, onComplete = null } = {}) {
+    if (!this.sequences[name]?.length) return;
+    this.current = name;
+    this.frame = 0;
+    this.elapsed = 0;
+    this.loop = loop;
+    this.onComplete = onComplete;
+    this.playing = true;
+    this.mat.map = this.sequences[name][0];
+    this.mat.needsUpdate = true;
+  }
+
+  tick(dt) {
+    if (!this.playing) return;
+    const frames = this.sequences[this.current];
+    if (!frames?.length) return;
+
+    this.elapsed += dt;
+    const frameDur = 1 / this.fps;
+    if (this.elapsed < frameDur) return;
+    this.elapsed -= frameDur;
+
+    this.frame++;
+    if (this.frame >= frames.length) {
+      if (this.loop) {
+        this.frame = 0;
+      } else {
+        this.frame = frames.length - 1;
+        this.playing = false;
+        if (this.onComplete) this.onComplete();
+        // Auto-return to idle
+        this.play('idle');
+        return;
+      }
+    }
+    this.mat.map = frames[this.frame];
+    this.mat.needsUpdate = true;
+  }
+}
+
+function loadTexture(url) {
+  return new Promise(resolve => {
+    const loader = new THREE.TextureLoader();
+    loader.load(url, tex => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      resolve(tex);
+    }, undefined, () => resolve(null));
+  });
+}
+
+async function loadSpriteSequences(monsterKey) {
+  const base = `assets/anims/${monsterKey}/`;
+  const seqs = { idle: [], cast: [], hit: [] };
+  const loads = [];
+
+  // idle: 4 frames
+  for (let i = 0; i < 4; i++) loads.push({ seq: 'idle', url: `${base}idle_${i}.png` });
+  // cast: 2 frames
+  for (let i = 0; i < 2; i++) loads.push({ seq: 'cast', url: `${base}cast_${i}.png` });
+  // hit: 2 frames
+  for (let i = 0; i < 2; i++) loads.push({ seq: 'hit', url: `${base}hit_${i}.png` });
+
+  const results = await Promise.all(loads.map(l => loadTexture(l.url)));
+  loads.forEach((l, i) => { if (results[i]) seqs[l.seq].push(results[i]); });
+
+  console.log(`[SPRITE] ${monsterKey}: idle=${seqs.idle.length} cast=${seqs.cast.length} hit=${seqs.hit.length}`);
+  return seqs;
+}
+
+let p1Animator = null, p2Animator = null;
 
 /* ==========================================================
    ANCHORS + TRACKING
@@ -718,13 +841,25 @@ async function lockCards() {
 }
 
 async function initCardGroups() {
-  const [p1Portrait, p2Portrait] = await Promise.all([
+  const [p1Portrait, p2Portrait, p1Seqs, p2Seqs] = await Promise.all([
     loadPortrait(DEMO_MONSTERS.p1.portrait),
     loadPortrait(DEMO_MONSTERS.p2.portrait),
+    loadSpriteSequences('p1'),
+    loadSpriteSequences('p2'),
   ]);
 
   p1CardGroup = makeCardGroup(DEMO_MONSTERS.p1, p1Portrait);
   p2CardGroup = makeCardGroup(DEMO_MONSTERS.p2, p2Portrait);
+
+  // Attach sprite animators if frames loaded
+  if (p1Seqs.idle.length) {
+    p1Animator = new SpriteAnimator(p1CardGroup.userData.spriteMat, p1Seqs, 8);
+    console.log('[SPRITE] P1 animator ready');
+  }
+  if (p2Seqs.idle.length) {
+    p2Animator = new SpriteAnimator(p2CardGroup.userData.spriteMat, p2Seqs, 8);
+    console.log('[SPRITE] P2 animator ready');
+  }
 
   a0.group.add(p1CardGroup);
   a1.group.add(p2CardGroup);
@@ -1134,6 +1269,10 @@ function dispose(mesh) {
    ANIMATIONS (card group versions)
    ========================================================== */
 function animCast(cardGroup) {
+  // Trigger sprite cast animation
+  const anim = cardGroup === p1CardGroup ? p1Animator : p2Animator;
+  if (anim) anim.play('cast', { loop: false });
+
   return new Promise(r => {
     const s0 = cardGroup.scale.clone();
     const t0 = performance.now();
@@ -1148,6 +1287,10 @@ function animCast(cardGroup) {
 }
 
 function animHit(cardGroup) {
+  // Trigger sprite hit animation
+  const anim = cardGroup === p1CardGroup ? p1Animator : p2Animator;
+  if (anim) anim.play('hit', { loop: false });
+
   return new Promise(r => {
     const { cardMat, glowMat } = cardGroup.userData;
     cardMat.color.set(0xff3333);
@@ -1302,6 +1445,11 @@ async function init() {
       tickAbilityTimer(now);
       bob(p1CardGroup, now / 1000);
       bob(p2CardGroup, now / 1000);
+
+      // Sprite animation tick
+      const dt = 1 / 60; // approximate — good enough for sprite FPS
+      if (p1Animator) p1Animator.tick(dt);
+      if (p2Animator) p2Animator.tick(dt);
 
       if (p1Tracked && p2Tracked && started && !cardsLocked) cachePositions();
 
