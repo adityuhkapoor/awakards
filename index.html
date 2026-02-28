@@ -136,6 +136,19 @@
       opacity: 0; transition: opacity 0.4s;
     }
 
+    /* --- Radial timer --- */
+    #radial-timer {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 20; display: none; text-align: center;
+    }
+    #radial-timer svg { width: 120px; height: 120px; }
+    #radial-timer circle { fill: none; stroke-width: 6; stroke-linecap: round;
+      transform: rotate(-90deg); transform-origin: center; }
+    .timer-track { stroke: #333; }
+    .timer-fill { stroke: #ffaa00; stroke-dasharray: 314; stroke-dashoffset: 314;
+      transition: stroke-dashoffset 0.1s linear; }
+    #radial-label { color: #fff; font-size: 16px; font-weight: 700; margin-top: 8px; }
+
     /* --- FPS --- */
     #fps {
       position: fixed; bottom: 80px; right: 8px; z-index: 10;
@@ -164,15 +177,19 @@
 
 <div id="turn-msg"></div>
 
-<div id="skills">
-  <button class="skill-btn fireball" data-skill="fireball">Fireball<span class="skill-dmg">30 DMG</span></button>
-  <button class="skill-btn ice" data-skill="ice">Ice Shard<span class="skill-dmg">20 DMG</span></button>
-  <button class="skill-btn ultimate" data-skill="ultimate">Ultimate<span class="skill-dmg">70 DMG</span></button>
-</div>
+<div id="skills"></div>
 
 <div id="game-over">
   <h1 id="go-title">VICTORY!</h1>
   <p id="go-sub">Your monster wins!</p>
+</div>
+
+<div id="radial-timer">
+  <svg viewBox="0 0 108 108">
+    <circle class="timer-track" cx="54" cy="54" r="50"/>
+    <circle class="timer-fill" id="timer-fill" cx="54" cy="54" r="50"/>
+  </svg>
+  <div id="radial-label"></div>
 </div>
 
 <div id="narration"></div>
@@ -186,12 +203,6 @@ import { MindARThree } from 'mindar-image-three';
 /* ==========================================================
    CONFIG
    ========================================================== */
-const SKILLS = {
-  fireball: { damage: 30, color: 0xff4400, size: 0.08, duration: 500, flash: false, shake: false },
-  ice:      { damage: 20, color: 0x0099ff, size: 0.06, duration: 450, flash: false, shake: false },
-  ultimate: { damage: 70, color: 0xffaa00, size: 0.15, duration: 700, flash: true,  shake: true  },
-};
-
 const TYPE_COLORS = {
   fire:      { primary: '#ff4400', secondary: '#ff8800', glow: '#ff440066' },
   ice:       { primary: '#0099ff', secondary: '#66ccff', glow: '#0099ff66' },
@@ -200,15 +211,12 @@ const TYPE_COLORS = {
   nature:    { primary: '#00cc44', secondary: '#66ff88', glow: '#00cc4466' },
 };
 
-const MAX_HP       = 100;
-const ENEMY_SKILL  = 'ice';
-const ENEMY_DELAY  = 1500;   // ms before enemy auto-fires
+const MAX_HP = 100;
 
 /* ==========================================================
    STATE
    ========================================================== */
 let p1HP = MAX_HP, p2HP = MAX_HP;
-let playerTurn  = true;
 let started     = false;
 let over        = false;
 let busy        = false;       // animation lock
@@ -508,17 +516,177 @@ async function initCardGroups() {
 }
 
 /* ==========================================================
+   ABILITY CARD DETECTION + RADIAL TIMER
+   ========================================================== */
+const ABILITY_TARGETS = {
+  2: { tier: 'basic',    name: 'Basic Attack',   damage: 25 },
+  3: { tier: 'special',  name: 'Special Attack',  damage: 20 },
+  4: { tier: 'ultimate', name: 'Ultimate Attack',  damage: 65 },
+};
+const CONFIRM_TIME = 2000;
+let currentPlayer = 1;
+let abilityDetected = null;
+let abilityDetectStart = 0;
+let abilityConfirmed = false;
+let turnCount = 0;
+
+const timerEl = $('#radial-timer');
+const timerFill = $('#timer-fill');
+const timerLabel = $('#radial-label');
+
+function onAbilityFound(targetIndex) {
+  if (!started || busy || over || abilityConfirmed) return;
+  const ability = ABILITY_TARGETS[targetIndex];
+  if (!ability) return;
+  console.log(`[ABILITY] ${ability.name} detected (target ${targetIndex})`);
+  abilityDetected = { ...ability, targetIndex };
+  abilityDetectStart = performance.now();
+  timerLabel.textContent = ability.name;
+  timerFill.style.strokeDashoffset = '314';
+  timerEl.style.display = 'block';
+}
+
+function onAbilityLost(targetIndex) {
+  if (!abilityDetected || abilityDetected.targetIndex !== targetIndex) return;
+  if (abilityConfirmed) return;
+  console.log(`[ABILITY] ${abilityDetected.name} lost`);
+  abilityDetected = null;
+  timerEl.style.display = 'none';
+}
+
+aBasic.onTargetFound   = () => onAbilityFound(2);
+aBasic.onTargetLost    = () => onAbilityLost(2);
+aSpecial.onTargetFound = () => onAbilityFound(3);
+aSpecial.onTargetLost  = () => onAbilityLost(3);
+aUlt.onTargetFound     = () => onAbilityFound(4);
+aUlt.onTargetLost      = () => onAbilityLost(4);
+
+function tickAbilityTimer(now) {
+  if (!abilityDetected || abilityConfirmed || busy || over) return;
+  const elapsed = now - abilityDetectStart;
+  const pct = Math.min(elapsed / CONFIRM_TIME, 1);
+  timerFill.style.strokeDashoffset = String(314 * (1 - pct));
+  if (pct >= 1) {
+    abilityConfirmed = true;
+    timerEl.style.display = 'none';
+    attackFromAbilityCard(abilityDetected);
+  }
+}
+
+async function attackFromAbilityCard(ability) {
+  if (busy || over) return;
+  busy = true;
+  setSkills(false);
+
+  const isP1 = currentPlayer === 1;
+  const atkr = isP1 ? p1CardGroup : p2CardGroup;
+  const defr = isP1 ? p2CardGroup : p1CardGroup;
+  const from = (isP1 ? cachedPos.p1 : cachedPos.p2).clone();
+  const to   = (isP1 ? cachedPos.p2 : cachedPos.p1).clone();
+  from.y += 0.1;
+  to.y   += 0.1;
+
+  // VFX config by tier
+  const vfx = {
+    basic:   { color: 0xff8800, size: 0.06, duration: 500, flash: false, shake: false },
+    special: { color: 0x00ccff, size: 0.08, duration: 450, flash: false, shake: false },
+    ultimate:{ color: 0xff44aa, size: 0.15, duration: 700, flash: true,  shake: true  },
+  };
+  const cfg = vfx[ability.tier];
+  const damage = ability.damage;
+
+  console.log(`[COMBAT] P${currentPlayer} plays ${ability.name} (${damage} dmg)`);
+  turnCount++;
+
+  await animCast(atkr);
+
+  await new Promise(done => {
+    spawnProjectile(from, to, cfg, async () => {
+      if (cfg.flash) screenFlash();
+
+      if (isP1) p2HP -= damage; else p1HP -= damage;
+      console.log(`[HP] P1: ${p1HP}/${MAX_HP} | P2: ${p2HP}/${MAX_HP}`);
+      syncHP();
+      updateCardHP(defr, isP1 ? p2HP : p1HP);
+      dmgNumber(damage, to, cfg.color);
+
+      const atkName = (isP1 ? DEMO_MONSTERS.p1 : DEMO_MONSTERS.p2).name;
+      const defName = (isP1 ? DEMO_MONSTERS.p2 : DEMO_MONSTERS.p1).name;
+      fetchNarration(ability.name, damage, atkName, defName, isP1 ? p2HP : p1HP, MAX_HP);
+
+      const dead = isP1 ? p2HP <= 0 : p1HP <= 0;
+      if (dead) {
+        console.log(`[GAME] P${isP1 ? 2 : 1} DEFEATED`);
+        await animDeath(defr);
+        over = true;
+        $('#go-title').textContent = isP1 ? 'P1 WINS!' : 'P2 WINS!';
+        $('#go-title').style.color = '#ffaa00';
+        $('#go-sub').textContent = `${isP1 ? DEMO_MONSTERS.p1.name : DEMO_MONSTERS.p2.name} is victorious!`;
+        goEl.style.display = 'flex';
+      } else {
+        await animHit(defr);
+      }
+      done();
+    });
+  });
+
+  busy = false;
+  abilityDetected = null;
+  abilityConfirmed = false;
+
+  if (over) return;
+
+  // Flip turn
+  currentPlayer = currentPlayer === 1 ? 2 : 1;
+  const monster = currentPlayer === 1 ? DEMO_MONSTERS.p1 : DEMO_MONSTERS.p2;
+  flash(`P${currentPlayer}'s Turn`, 800, () => {
+    renderSkillButtons(monster);
+    setSkills(true);
+  });
+}
+
+/* ==========================================================
+   DYNAMIC SKILL BUTTONS (fallback for non-card play)
+   ========================================================== */
+function renderSkillButtons(monster) {
+  const skills = monster.skills || [];
+  const damages = [25, 20, 65];
+  const classes = ['fireball', 'ice', 'ultimate'];
+  skillsEl.replaceChildren();
+  skills.forEach((sk, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'skill-btn ' + classes[i];
+    btn.dataset.tier = ['basic', 'special', 'ultimate'][i];
+    btn.dataset.damage = String(damages[i]);
+    btn.textContent = sk.name;
+    const dmg = document.createElement('span');
+    dmg.className = 'skill-dmg';
+    dmg.textContent = damages[i] + ' DMG';
+    btn.appendChild(dmg);
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      if (busy || over) return;
+      const tier = btn.dataset.tier;
+      const ability = { tier, name: sk.name, damage: damages[i] };
+      attackFromAbilityCard(ability);
+    });
+    skillsEl.appendChild(btn);
+  });
+}
+
+/* ==========================================================
    GAME START
    ========================================================== */
 function beginGame() {
   console.log('[GAME] Both cards tracked — FIGHT START');
   started = true;
+  currentPlayer = 1;
   statusEl.style.opacity = '0';
   hudEl.style.display = 'flex';
   flash('FIGHT!', 1000, () => {
-    playerTurn = true;
+    renderSkillButtons(DEMO_MONSTERS.p1);
     setSkills(true);
-    flash('Your Turn', 800);
+    flash("P1's Turn", 800);
   });
 }
 
@@ -751,79 +919,6 @@ function animDeath(cardGroup) {
 }
 
 /* ==========================================================
-   COMBAT
-   ========================================================== */
-async function attack(skillKey, isP1) {
-  if (busy || over) return;
-  busy = true;
-  setSkills(false);
-  console.log(`[COMBAT] ${isP1 ? 'P1' : 'P2'} uses ${skillKey.toUpperCase()} (${SKILLS[skillKey].damage} dmg)`);
-
-  const cfg  = SKILLS[skillKey];
-  const atkr = isP1 ? p1CardGroup : p2CardGroup;
-  const defr = isP1 ? p2CardGroup : p1CardGroup;
-  const from = (isP1 ? cachedPos.p1 : cachedPos.p2).clone();
-  const to   = (isP1 ? cachedPos.p2 : cachedPos.p1).clone();
-  from.y += 0.1;
-  to.y   += 0.1;
-
-  await animCast(atkr);
-
-  await new Promise(done => {
-    spawnProjectile(from, to, cfg, async () => {
-      if (cfg.flash) screenFlash();
-
-      if (isP1) p2HP -= cfg.damage; else p1HP -= cfg.damage;
-      console.log(`[HP] P1: ${p1HP}/${MAX_HP} | P2: ${p2HP}/${MAX_HP}`);
-      syncHP();
-      updateCardHP(defr, isP1 ? p2HP : p1HP);
-      dmgNumber(cfg.damage, to, cfg.color);
-
-      // Non-blocking narration
-      const defHP = isP1 ? p2HP : p1HP;
-      const atkName = (isP1 ? DEMO_MONSTERS.p1 : DEMO_MONSTERS.p2).name;
-      const defName = (isP1 ? DEMO_MONSTERS.p2 : DEMO_MONSTERS.p1).name;
-      fetchNarration(skillKey, cfg.damage, atkName, defName, defHP, MAX_HP);
-
-      const dead = isP1 ? p2HP <= 0 : p1HP <= 0;
-      if (dead) {
-        console.log(`[GAME] ${isP1 ? 'P2' : 'P1'} DEFEATED — ${isP1 ? 'VICTORY' : 'DEFEAT'}`);
-        await animDeath(defr);
-        over = true;
-        $('#go-title').textContent = isP1 ? 'VICTORY!' : 'DEFEAT!';
-        $('#go-title').style.color = isP1 ? '#ffaa00' : '#ff4444';
-        $('#go-sub').textContent   = isP1 ? 'Your monster wins!' : 'Enemy monster wins...';
-        goEl.style.display = 'flex';
-      } else {
-        await animHit(defr);
-      }
-      done();
-    });
-  });
-
-  busy = false;
-  if (over) return;
-
-  if (isP1) {
-    playerTurn = false;
-    flash('Enemy Turn', 800, () => setTimeout(() => attack(ENEMY_SKILL, false), ENEMY_DELAY));
-  } else {
-    playerTurn = true;
-    flash('Your Turn', 800, () => setSkills(true));
-  }
-}
-
-/* ==========================================================
-   SKILL BUTTONS
-   ========================================================== */
-document.querySelectorAll('.skill-btn').forEach(btn => {
-  btn.addEventListener('click', e => {
-    e.preventDefault();
-    if (playerTurn && !busy && !over) attack(btn.dataset.skill, true);
-  });
-});
-
-/* ==========================================================
    IDLE BOB
    ========================================================== */
 function bob(cardGroup, t) {
@@ -892,6 +987,7 @@ async function init() {
       const now = performance.now();
 
       tickProjectiles(now);
+      tickAbilityTimer(now);
       bob(p1CardGroup, now / 1000);
       bob(p2CardGroup, now / 1000);
 
