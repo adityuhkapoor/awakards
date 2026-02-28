@@ -377,33 +377,103 @@ function makeGlowCanvas(type) {
 }
 
 /* ==========================================================
-   MONSTER CREATION
+   DEMO MONSTERS (pre-cached for reliability)
    ========================================================== */
-function makeMonster(color, emissive) {
-  const mat = new THREE.MeshStandardMaterial({
-    color, emissive, emissiveIntensity: 0.3, metalness: 0.3, roughness: 0.4,
-  });
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), mat);
-  mesh.position.y = 0.1;
-  mesh.userData = { origColor: color, origEmissive: emissive, alive: true };
-  return mesh;
-}
-
-const p1Mon = makeMonster(0xff3333, 0x440000);
-const p2Mon = makeMonster(0x3366ff, 0x000044);
-
-const a0 = mindar.addAnchor(0);
-const a1 = mindar.addAnchor(1);
-a0.group.add(p1Mon);
-a1.group.add(p2Mon);
+const DEMO_MONSTERS = {
+  p1: {
+    name: 'Ceramic Golem', type: 'nature', hp: 100, maxHP: 100,
+    description: 'A hulking golem forged from glazed ceramic shards, with moss growing between the cracks.',
+    skills: [
+      { name: 'Shard Toss', color: '#00cc44', description: 'Hurls razor-sharp ceramic fragments' },
+      { name: 'Moss Bind', color: '#66ff88', description: 'Entangling vines erupt from cracks' },
+      { name: 'Kiln Eruption', color: '#ff8800', description: 'Superheated clay explosion' },
+    ],
+    portrait: null,
+  },
+  p2: {
+    name: 'Frost Serpent', type: 'ice', hp: 100, maxHP: 100,
+    description: 'A sinuous ice serpent with crystalline scales that refract light into prismatic daggers.',
+    skills: [
+      { name: 'Frost Fang', color: '#0099ff', description: 'Icy bite that chills to the bone' },
+      { name: 'Glacial Coil', color: '#66ccff', description: 'Wraps prey in freezing spirals' },
+      { name: 'Absolute Zero', color: '#ffffff', description: 'Flash-freezes everything nearby' },
+    ],
+    portrait: null,
+  },
+};
 
 /* ==========================================================
-   TRACKING CALLBACKS
+   CARD GROUP CREATION
    ========================================================== */
-a0.onTargetFound = () => { p1Tracked = true;  console.log('[TRACK] Card 1 FOUND'); onTrack(); };
-a0.onTargetLost  = () => { p1Tracked = false; console.log('[TRACK] Card 1 LOST');  onTrack(); };
-a1.onTargetFound = () => { p2Tracked = true;  console.log('[TRACK] Card 2 FOUND'); onTrack(); };
-a1.onTargetLost  = () => { p2Tracked = false; console.log('[TRACK] Card 2 LOST');  onTrack(); };
+let p1CardGroup = null, p2CardGroup = null;
+
+function loadPortrait(url) {
+  if (!url) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+function makeCardGroup(monsterData, portraitImg) {
+  const group = new THREE.Group();
+  group.position.y = 0.1;
+
+  // Glow plane (behind card)
+  const glowCanvas = makeGlowCanvas(monsterData.type);
+  const glowTex = new THREE.CanvasTexture(glowCanvas);
+  const glowMat = new THREE.MeshBasicMaterial({
+    map: glowTex, transparent: true, opacity: 0.6, depthWrite: false,
+  });
+  const glowPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 1.02), glowMat);
+  glowPlane.position.z = -0.005;
+  group.add(glowPlane);
+
+  // Card plane
+  const cardCanvas = renderCardCanvas(monsterData, portraitImg);
+  const cardTex = new THREE.CanvasTexture(cardCanvas);
+  cardTex.colorSpace = THREE.SRGBColorSpace;
+  const cardMat = new THREE.MeshBasicMaterial({
+    map: cardTex, transparent: true, side: THREE.DoubleSide,
+  });
+  const cardPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.9), cardMat);
+  group.add(cardPlane);
+
+  group.userData = {
+    alive: true,
+    cardCanvas, cardTex, cardMat, cardPlane,
+    glowPlane, glowMat,
+    monsterData, portraitImg,
+  };
+
+  return group;
+}
+
+function updateCardHP(cardGroup, currentHP) {
+  const ud = cardGroup.userData;
+  ud.monsterData.hp = currentHP;
+  const newCanvas = renderCardCanvas(ud.monsterData, ud.portraitImg);
+  ud.cardCanvas = newCanvas;
+  ud.cardTex.image = newCanvas;
+  ud.cardTex.needsUpdate = true;
+}
+
+/* ==========================================================
+   ANCHORS + TRACKING
+   ========================================================== */
+const a0 = mindar.addAnchor(0);  // P1 monster
+const a1 = mindar.addAnchor(1);  // P2 monster
+const aBasic   = mindar.addAnchor(2);  // Basic attack
+const aSpecial = mindar.addAnchor(3);  // Special attack
+const aUlt     = mindar.addAnchor(4);  // Ultimate attack
+
+a0.onTargetFound = () => { p1Tracked = true;  console.log('[TRACK] P1 Monster FOUND'); onTrack(); };
+a0.onTargetLost  = () => { p1Tracked = false; console.log('[TRACK] P1 Monster LOST');  onTrack(); };
+a1.onTargetFound = () => { p2Tracked = true;  console.log('[TRACK] P2 Monster FOUND'); onTrack(); };
+a1.onTargetLost  = () => { p2Tracked = false; console.log('[TRACK] P2 Monster LOST');  onTrack(); };
 
 function onTrack() {
   if (p1Tracked && p2Tracked) {
@@ -412,14 +482,29 @@ function onTrack() {
   }
   if (!started) {
     if (!p1Tracked && !p2Tracked) statusEl.textContent = 'Point camera at both cards';
-    else if (p1Tracked && !p2Tracked) statusEl.textContent = 'Card 1 found — looking for Card 2...';
-    else if (!p1Tracked && p2Tracked) statusEl.textContent = 'Card 2 found — looking for Card 1...';
+    else if (p1Tracked && !p2Tracked) statusEl.textContent = 'P1 found — looking for P2...';
+    else if (!p1Tracked && p2Tracked) statusEl.textContent = 'P2 found — looking for P1...';
   }
 }
 
 function cachePositions() {
   a0.group.getWorldPosition(cachedPos.p1);
   a1.group.getWorldPosition(cachedPos.p2);
+}
+
+async function initCardGroups() {
+  const [p1Portrait, p2Portrait] = await Promise.all([
+    loadPortrait(DEMO_MONSTERS.p1.portrait),
+    loadPortrait(DEMO_MONSTERS.p2.portrait),
+  ]);
+
+  p1CardGroup = makeCardGroup(DEMO_MONSTERS.p1, p1Portrait);
+  p2CardGroup = makeCardGroup(DEMO_MONSTERS.p2, p2Portrait);
+
+  a0.group.add(p1CardGroup);
+  a1.group.add(p2CardGroup);
+
+  console.log('[INIT] Card groups created');
 }
 
 /* ==========================================================
@@ -582,61 +667,62 @@ function dispose(mesh) {
 }
 
 /* ==========================================================
-   ANIMATIONS
+   ANIMATIONS (card group versions)
    ========================================================== */
-function animCast(mon) {
+function animCast(cardGroup) {
   return new Promise(r => {
-    const s0 = mon.scale.clone();
+    const s0 = cardGroup.scale.clone();
     const t0 = performance.now();
     (function tick() {
       const t = (performance.now() - t0) / 280;
-      if (t >= 1) { mon.scale.copy(s0); return r(); }
+      if (t >= 1) { cardGroup.scale.copy(s0); return r(); }
       const s = 1 + 0.35 * Math.sin(t * Math.PI);
-      mon.scale.set(s0.x * s, s0.y * s, s0.z * s);
+      cardGroup.scale.set(s0.x * s, s0.y * s, s0.z * s);
       requestAnimationFrame(tick);
     })();
   });
 }
 
-function animHit(mon) {
+function animHit(cardGroup) {
   return new Promise(r => {
-    const { origColor, origEmissive } = mon.userData;
-    mon.material.color.set(0xff0000);
-    mon.material.emissive.set(0xff0000);
-    mon.material.emissiveIntensity = 1;
-    const p0 = mon.position.clone();
+    const { cardMat, glowMat } = cardGroup.userData;
+    cardMat.color.set(0xff3333);
+    glowMat.opacity = 1.0;
+    const p0 = cardGroup.position.clone();
     const t0 = performance.now();
     (function tick() {
       const t = (performance.now() - t0) / 350;
       if (t >= 1) {
-        mon.material.color.set(origColor);
-        mon.material.emissive.set(origEmissive);
-        mon.material.emissiveIntensity = 0.3;
-        mon.position.copy(p0);
+        cardMat.color.set(0xffffff);
+        glowMat.opacity = 0.6;
+        cardGroup.position.copy(p0);
         return r();
       }
-      mon.position.x = p0.x + (Math.random() - 0.5) * 0.02;
-      mon.position.z = p0.z + (Math.random() - 0.5) * 0.02;
+      cardGroup.position.x = p0.x + (Math.random() - 0.5) * 0.02;
+      cardGroup.position.z = p0.z + (Math.random() - 0.5) * 0.02;
       if (t > 0.5) {
         const f = (t - 0.5) / 0.5;
-        mon.material.emissiveIntensity = 1 - f * 0.7;
+        cardMat.color.lerp(new THREE.Color(0xffffff), f);
+        glowMat.opacity = 1.0 - f * 0.4;
       }
       requestAnimationFrame(tick);
     })();
   });
 }
 
-function animDeath(mon) {
+function animDeath(cardGroup) {
   return new Promise(r => {
-    mon.userData.alive = false;
+    cardGroup.userData.alive = false;
+    const tc = TYPE_COLORS[cardGroup.userData.monsterData.type] || TYPE_COLORS.fire;
+    const particleColor = new THREE.Color(tc.primary);
     const bits = [];
     for (let i = 0; i < 20; i++) {
       const m = new THREE.Mesh(
         new THREE.SphereGeometry(0.015, 6, 6),
-        new THREE.MeshBasicMaterial({ color: mon.material.color.getHex(), transparent: true, opacity: 1 })
+        new THREE.MeshBasicMaterial({ color: particleColor, transparent: true, opacity: 1 })
       );
-      m.position.copy(mon.position);
-      mon.parent.add(m);
+      m.position.copy(cardGroup.position);
+      cardGroup.parent.add(m);
       bits.push({
         m,
         v: new THREE.Vector3((Math.random() - 0.5) * 0.5, Math.random() * 0.35, (Math.random() - 0.5) * 0.5),
@@ -646,12 +732,14 @@ function animDeath(mon) {
     (function tick() {
       const t = (performance.now() - t0) / 750;
       if (t >= 1) {
-        mon.scale.set(0, 0, 0);
+        cardGroup.scale.set(0, 0, 0);
+        cardGroup.userData.cardMat.opacity = 0;
         bits.forEach(b => dispose(b.m));
         return r();
       }
-      mon.scale.setScalar(1 - t);
-      mon.rotation.y += 0.12;
+      cardGroup.scale.setScalar(1 - t);
+      cardGroup.userData.cardMat.opacity = 1 - t;
+      cardGroup.userData.glowMat.opacity = 0.6 * (1 - t);
       bits.forEach(b => {
         b.m.position.addScaledVector(b.v, 0.016);
         b.v.y -= 0.006;
@@ -672,8 +760,8 @@ async function attack(skillKey, isP1) {
   console.log(`[COMBAT] ${isP1 ? 'P1' : 'P2'} uses ${skillKey.toUpperCase()} (${SKILLS[skillKey].damage} dmg)`);
 
   const cfg  = SKILLS[skillKey];
-  const atkr = isP1 ? p1Mon : p2Mon;
-  const defr = isP1 ? p2Mon : p1Mon;
+  const atkr = isP1 ? p1CardGroup : p2CardGroup;
+  const defr = isP1 ? p2CardGroup : p1CardGroup;
   const from = (isP1 ? cachedPos.p1 : cachedPos.p2).clone();
   const to   = (isP1 ? cachedPos.p2 : cachedPos.p1).clone();
   from.y += 0.1;
@@ -688,11 +776,14 @@ async function attack(skillKey, isP1) {
       if (isP1) p2HP -= cfg.damage; else p1HP -= cfg.damage;
       console.log(`[HP] P1: ${p1HP}/${MAX_HP} | P2: ${p2HP}/${MAX_HP}`);
       syncHP();
+      updateCardHP(defr, isP1 ? p2HP : p1HP);
       dmgNumber(cfg.damage, to, cfg.color);
 
       // Non-blocking narration
       const defHP = isP1 ? p2HP : p1HP;
-      fetchNarration(skillKey, cfg.damage, isP1 ? 'P1' : 'P2', isP1 ? 'P2' : 'P1', defHP, MAX_HP);
+      const atkName = (isP1 ? DEMO_MONSTERS.p1 : DEMO_MONSTERS.p2).name;
+      const defName = (isP1 ? DEMO_MONSTERS.p2 : DEMO_MONSTERS.p1).name;
+      fetchNarration(skillKey, cfg.damage, atkName, defName, defHP, MAX_HP);
 
       const dead = isP1 ? p2HP <= 0 : p1HP <= 0;
       if (dead) {
@@ -735,10 +826,12 @@ document.querySelectorAll('.skill-btn').forEach(btn => {
 /* ==========================================================
    IDLE BOB
    ========================================================== */
-function bob(mon, t) {
-  if (!mon.userData.alive) return;
-  mon.position.y = 0.1 + Math.sin(t * 2) * 0.008;
-  mon.rotation.y += 0.004;
+function bob(cardGroup, t) {
+  if (!cardGroup || !cardGroup.userData.alive) return;
+  cardGroup.position.y = 0.1 + Math.sin(t * 2) * 0.008;
+  cardGroup.rotation.z = Math.sin(t * 1.5) * 0.02;
+  // Glow pulse
+  cardGroup.userData.glowMat.opacity = 0.5 + 0.15 * Math.sin(t * 3);
 }
 
 /* ==========================================================
@@ -756,7 +849,8 @@ fpsEl.addEventListener('click', () => {
     debugTaps = 0;
     p2HP = 0;
     syncHP();
-    animDeath(p2Mon).then(() => {
+    updateCardHP(p2CardGroup, 0);
+    animDeath(p2CardGroup).then(() => {
       over = true;
       $('#go-title').textContent = 'VICTORY!';
       $('#go-title').style.color = '#ffaa00';
@@ -786,6 +880,8 @@ fpsEl.addEventListener('click', () => {
    ========================================================== */
 async function init() {
   try {
+    console.log('[INIT] Creating card groups...');
+    await initCardGroups();
     console.log('[INIT] Starting MindAR...');
     statusEl.textContent = 'Starting camera...';
     await mindar.start();
@@ -796,8 +892,8 @@ async function init() {
       const now = performance.now();
 
       tickProjectiles(now);
-      bob(p1Mon, now / 1000);
-      bob(p2Mon, now / 1000);
+      bob(p1CardGroup, now / 1000);
+      bob(p2CardGroup, now / 1000);
 
       if (p1Tracked && p2Tracked && started) cachePositions();
 
