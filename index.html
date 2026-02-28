@@ -1480,6 +1480,12 @@ async function init() {
         fpsEl.textContent = frames + ' FPS';
         frames = 0;
         lastFps = now;
+        // Sprite debug — log every second
+        if (p1CardGroup) {
+          const sm = p1CardGroup.userData.spriteMat;
+          const sp = p1CardGroup.userData.spritePlane;
+          console.log(`[SPRITE-DBG] P1: opacity=${sm.opacity.toFixed(2)} map=${!!sm.map} visible=${sp.visible} parent=${sp.parent?.type} scale=${p1CardGroup.scale.x.toFixed(2)} inScene=${!!p1CardGroup.parent}`);
+        }
       }
 
       renderer.render(scene, camera);
