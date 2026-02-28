@@ -40,11 +40,16 @@ GEMINI_MODEL = "gemini-2.5-flash"
 IMAGEN_MODEL = "imagen-4.0-fast-generate-001"
 
 MONSTER_PROMPT = """Analyze this image and create a fantasy battle monster inspired by what you see.
-Be creative — the monster should visually reference the object/scene in the image.
+Be creative, but grounded in the visual input.
+CRITICAL: the monster must visually resemble the object in the image.
+Example grounding:
+- If you see a coffee mug, the monster should look like a golem made of ceramic.
+- If you see a bicycle, the monster should have wheel-like armor and chain motifs.
 Return JSON with this exact schema:
 {
   "name": string (2-3 word creative monster name),
   "type": string (one of: fire, ice, lightning, shadow, nature),
+  "image_description": string (one sentence describing the key object/scene detected in the image),
   "description": string (one sentence visual description for generating art — describe the monster's appearance, NOT the original image),
   "skills": [
     {"name": string (creative skill name), "color": string (hex color like #ff4400), "description": string (short flavor text)},
@@ -68,8 +73,7 @@ def gemini_proxy(body):
         ]}],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.8,
-            "thinkingConfig": {"thinkingBudget": 0},
+            "temperature": 0.6,
         },
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
@@ -83,13 +87,44 @@ def gemini_proxy(body):
     return monster
 
 
+NARRATE_PROMPT = """You are the announcer for an AR card battle. Given the game state,
+write ONE dramatic sentence narrating what just happened. Be vivid, brief, exciting.
+Game state:
+{state}
+Write exactly one sentence. No quotes. No JSON."""
+
+
+def narrate_proxy(body):
+    """Generate one-sentence battle narration via Gemini Flash."""
+    data = json.loads(body)
+    state = json.dumps(data, indent=2)
+
+    payload = {
+        "contents": [{"parts": [
+            {"text": NARRATE_PROMPT.format(state=state)},
+        ]}],
+        "generationConfig": {
+            "temperature": 0.9,
+            "maxOutputTokens": 100,
+        },
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+    resp = urllib.request.urlopen(req, timeout=10)
+    result = json.loads(resp.read())
+    text = result["candidates"][0]["content"]["parts"][0]["text"].strip()
+    return {"narration": text}
+
+
 def imagen_proxy(body):
     """Generate monster portrait via Imagen 4."""
     data = json.loads(body)
     description = data.get("description", "")
+    image_description = data.get("image_description", "")
     monster_type = data.get("type", "fire")
 
-    prompt = f"Fantasy battle monster portrait: {description}. {monster_type} elemental creature. Digital art style, dramatic lighting, game card art, detailed, vibrant colors. Black background. No text or words."
+    source_context = f"Source object context: {image_description}. " if image_description else ""
+    prompt = f"{source_context}Fantasy battle monster portrait: {description}. {monster_type} elemental creature. Must visibly resemble the source object context. Digital art style, dramatic lighting, game card art, detailed, vibrant colors. Black background. No text or words."
 
     payload = {
         "instances": [{"prompt": prompt}],
@@ -154,6 +189,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json_response(200, monster)
             except Exception as e:
                 print(f"  [GEMINI] ERROR: {e}")
+                self._json_response(500, {"error": str(e)})
+
+        elif self.path == "/api/narrate":
+            try:
+                print(f"  [NARRATE] Generating narration...")
+                t0 = datetime.now()
+                result = narrate_proxy(body)
+                dt = (datetime.now() - t0).total_seconds()
+                print(f"  [NARRATE] Done in {dt:.1f}s — {result['narration'][:60]}")
+                self._json_response(200, result)
+            except Exception as e:
+                print(f"  [NARRATE] ERROR: {e}")
                 self._json_response(500, {"error": str(e)})
 
         elif self.path == "/api/imagen":

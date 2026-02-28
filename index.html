@@ -127,6 +127,15 @@
       100% { opacity: 0; transform: translateY(-65px) scale(0.8); }
     }
 
+    /* --- Narration --- */
+    #narration {
+      position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+      z-index: 15; max-width: 90vw; padding: 10px 20px; border-radius: 10px;
+      background: rgba(0,0,0,0.8); color: #ffcc66; font-size: 14px;
+      font-style: italic; text-align: center; pointer-events: none;
+      opacity: 0; transition: opacity 0.4s;
+    }
+
     /* --- FPS --- */
     #fps {
       position: fixed; bottom: 80px; right: 8px; z-index: 10;
@@ -166,6 +175,7 @@
   <p id="go-sub">Your monster wins!</p>
 </div>
 
+<div id="narration"></div>
 <div id="flash"></div>
 <div id="fps"></div>
 
@@ -334,6 +344,39 @@ function dmgNumber(val, worldPos, color) {
 function screenFlash() {
   flashEl.style.opacity = '0.5';
   setTimeout(() => (flashEl.style.opacity = '0'), 120);
+}
+
+/* ==========================================================
+   NARRATION
+   ========================================================== */
+const narrationEl = $('#narration');
+let narrationTimer = null;
+
+function fetchNarration(ability, damage, attackerName, defenderName, defenderHP, maxHP) {
+  const state = {
+    attacker: attackerName,
+    defender: defenderName,
+    ability: ability,
+    damage: damage,
+    defenderHP: Math.max(0, defenderHP),
+    defenderMaxHP: maxHP,
+    ko: defenderHP <= 0,
+  };
+  fetch('/api/narrate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state),
+  })
+    .then(r => r.json())
+    .then(d => { if (d.narration) showNarration(d.narration); })
+    .catch(() => {});
+}
+
+function showNarration(text) {
+  clearTimeout(narrationTimer);
+  narrationEl.textContent = text;
+  narrationEl.style.opacity = '1';
+  narrationTimer = setTimeout(() => { narrationEl.style.opacity = '0'; }, 3500);
 }
 
 /* ==========================================================
@@ -512,6 +555,10 @@ async function attack(skillKey, isP1) {
       console.log(`[HP] P1: ${p1HP}/${MAX_HP} | P2: ${p2HP}/${MAX_HP}`);
       syncHP();
       dmgNumber(cfg.damage, to, cfg.color);
+
+      // Non-blocking narration
+      const defHP = isP1 ? p2HP : p1HP;
+      fetchNarration(skillKey, cfg.damage, isP1 ? 'P1' : 'P2', isP1 ? 'P2' : 'P1', defHP, MAX_HP);
 
       const dead = isP1 ? p2HP <= 0 : p1HP <= 0;
       if (dead) {
