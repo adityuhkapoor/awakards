@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Awakards - Battle</title>
+
+  <!-- Remote log relay: captures console.* and POSTs to server for Claude to read -->
+  <script>
+  (function() {
+    const Q = [];
+    let timer = null;
+    function flush() {
+      if (!Q.length) return;
+      const batch = Q.splice(0, 50);
+      fetch('/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(batch) }).catch(() => {});
+    }
+    function hook(level) {
+      const orig = console[level].bind(console);
+      console[level] = function(...args) {
+        orig(...args);
+        Q.push({ level, msg: args.map(a => {
+          try { return typeof a === 'object' ? JSON.stringify(a) : String(a); }
+          catch { return String(a); }
+        }).join(' ') });
+        clearTimeout(timer);
+        timer = setTimeout(flush, 300);
+      };
+    }
+    ['log','warn','error','info'].forEach(hook);
+    window.addEventListener('error', e => {
+      Q.push({ level: 'error', msg: e.message + ' at ' + e.filename + ':' + e.lineno });
+      flush();
+    });
+    window.addEventListener('unhandledrejection', e => {
+      Q.push({ level: 'error', msg: 'Unhandled rejection: ' + e.reason });
+      flush();
+    });
+  })();
+  </script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
+    }
+  }
+  </script>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, sans-serif; touch-action: none; }
+
+    #container { width: 100vw; height: 100vh; position: relative; overflow: hidden; }
+
+    /* --- Error overlay --- */
+    #error-overlay {
+      position: fixed; inset: 0; z-index: 50;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.95); color: #fff; text-align: center; padding: 24px;
+    }
+    #error-overlay h2 { font-size: 24px; margin-bottom: 12px; color: #ff6644; }
+    #error-overlay p { font-size: 15px; color: #ccc; margin-bottom: 20px; }
+    #error-overlay a {
+      display: inline-block; padding: 12px 28px; border-radius: 10px;
+      background: linear-gradient(135deg, #ffbb00, #ff6600); color: #fff;
+      text-decoration: none; font-weight: 700; font-size: 15px;
+    }
+
+    /* --- Status banner --- */
+    #status {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      z-index: 10; color: #fff; font-size: 16px; text-align: center;
+      background: rgba(0,0,0,0.75); padding: 10px 24px; border-radius: 12px;
+      pointer-events: none; transition: opacity 0.3s;
+    }
+
+    /* --- HUD (HP bars) --- */
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      display: none; justify-content: space-between; padding: 50px 16px 0;
+      pointer-events: none;
+    }
+    .hp-wrap { width: 140px; }
+    .hp-label { color: #fff; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .hp-track { height: 10px; border-radius: 5px; background: rgba(255,255,255,0.15); overflow: hidden; }
+    .hp-fill { height: 100%; border-radius: 5px; transition: width 0.4s ease-out; }
+    .hp-fill.p1 { background: linear-gradient(90deg, #00ff88, #00cc66); }
+    .hp-fill.p2 { background: linear-gradient(90deg, #ff4444, #cc0000); }
+    .hp-num { color: #ccc; font-size: 10px; margin-top: 2px; text-align: center; font-variant-numeric: tabular-nums; }
+
+    /* --- Turn indicator --- */
+    #turn-msg {
+      position: fixed; top: 45%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 20; color: #fff; font-size: 30px; font-weight: 800;
+      text-shadow: 0 0 20px rgba(255,255,255,0.4); pointer-events: none;
+      opacity: 0; transition: opacity 0.25s;
+    }
+
+    /* --- Special ability toast --- */
+    #special-toast {
+      position: fixed; top: 38%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 21; color: #ffdd44; font-size: 18px; font-weight: 700;
+      text-shadow: 0 0 12px rgba(255,200,0,0.5); pointer-events: none;
+      opacity: 0; transition: opacity 0.25s;
+    }
+
+    /* --- Skill buttons --- */
+    #skills {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+      display: none; padding: 16px 12px 24px; gap: 10px; justify-content: center;
+    }
+    .skill-btn {
+      flex: 1; max-width: 110px; padding: 14px 6px; border: none; border-radius: 14px;
+      color: #fff; font-size: 13px; font-weight: 700; cursor: pointer;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5); transition: transform 0.1s, opacity 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .skill-btn:active { transform: scale(0.92); }
+    .skill-btn:disabled { opacity: 0.35; pointer-events: none; }
+    .skill-btn.ultimate { box-shadow: 0 0 14px rgba(255,170,0,0.35); }
+    .skill-dmg { display: block; font-size: 10px; opacity: 0.8; margin-top: 3px; }
+
+    /* --- Game-over overlay --- */
+    #game-over {
+      position: fixed; inset: 0; z-index: 30; display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.85);
+    }
+    #game-over h1 { font-size: 44px; text-shadow: 0 0 30px rgba(255,170,0,0.6); }
+    #game-over p  { color: #ccc; font-size: 16px; margin-top: 8px; }
+
+    /* --- Screen flash --- */
+    #flash { position: fixed; inset: 0; z-index: 15; pointer-events: none; background: #fff; opacity: 0; transition: opacity 0.1s; }
+
+    /* --- Floating damage numbers --- */
+    .dmg-float {
+      position: fixed; z-index: 25; font-size: 26px; font-weight: 900;
+      text-shadow: 0 0 8px rgba(255,0,0,0.4); pointer-events: none;
+      animation: float-up 0.9s ease-out forwards;
+    }
+    @keyframes float-up {
+      0%   { opacity: 1; transform: translateY(0) scale(1); }
+      60%  { opacity: 1; transform: translateY(-40px) scale(1.1); }
+      100% { opacity: 0; transform: translateY(-65px) scale(0.8); }
+    }
+
+    /* --- Status effect indicator --- */
+    .status-float {
+      position: fixed; z-index: 25; font-size: 16px; font-weight: 700;
+      text-shadow: 0 0 6px rgba(255,200,0,0.4); pointer-events: none; color: #ffdd44;
+      animation: float-up 1.2s ease-out forwards;
+    }
+
+    /* --- FPS --- */
+    #fps {
+      position: fixed; bottom: 80px; right: 8px; z-index: 10;
+      color: #0f0; font-size: 11px; font-family: monospace; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="container"></div>
+
+<div id="error-overlay">
+  <h2>No Monster Data</h2>
+  <p>You need to create your monsters before battling.</p>
+  <a href="create.html">Create Monsters</a>
+</div>
+
+<div id="status">Initializing camera...</div>
+
+<div id="hud">
+  <div class="hp-wrap">
+    <div class="hp-label" id="p1-label">YOUR MONSTER</div>
+    <div class="hp-track"><div class="hp-fill p1" id="p1-fill" style="width:100%"></div></div>
+    <div class="hp-num" id="p1-num">100 / 100</div>
+  </div>
+  <div class="hp-wrap">
+    <div class="hp-label" id="p2-label">ENEMY</div>
+    <div class="hp-track"><div class="hp-fill p2" id="p2-fill" style="width:100%"></div></div>
+    <div class="hp-num" id="p2-num">100 / 100</div>
+  </div>
+</div>
+
+<div id="turn-msg"></div>
+<div id="special-toast"></div>
+
+<div id="skills"></div>
+
+<div id="game-over">
+  <h1 id="go-title">VICTORY!</h1>
+  <p id="go-sub">Your monster wins!</p>
+</div>
+
+<div id="flash"></div>
+<div id="fps"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { MindARThree } from 'mindar-image-three';
+
+/* ==========================================================
+   LOAD MONSTER DATA FROM LOCALSTORAGE
+   ========================================================== */
+const p1Data = JSON.parse(localStorage.getItem('awakards_p1'));
+const p2Data = JSON.parse(localStorage.getItem('awakards_p2'));
+
+if (!p1Data || !p2Data) {
+  document.getElementById('error-overlay').style.display = 'flex';
+  document.getElementById('status').style.display = 'none';
+  throw new Error('Missing monster data in localStorage. Navigate to create.html first.');
+}
+
+/* ==========================================================
+   HELPERS
+   ========================================================== */
+function darkenColor(hex, amount) {
+  const num = parseInt(hex.replace('#', ''), 16);
+  const r = Math.max(0, (num >> 16) - Math.floor(255 * amount));
+  const g = Math.max(0, ((num >> 8) & 0xff) - Math.floor(255 * amount));
+  const b = Math.max(0, (num & 0xff) - Math.floor(255 * amount));
+  return `#${(r << 16 | g << 8 | b).toString(16).padStart(6, '0')}`;
+}
+
+/* ==========================================================
+   BUILD SKILL CONFIGS DYNAMICALLY
+   ========================================================== */
+function buildSkillConfig(skills) {
+  const config = {};
+  skills.forEach((sk, i) => {
+    const key = i === 2 ? 'ultimate' : `skill${i}`;
+    config[key] = {
+      damage: sk.damage,
+      color: parseInt(sk.color.replace('#', ''), 16),
+      size: i === 2 ? 0.14 : 0.07,
+      duration: i === 2 ? 700 : 480,
+      flash: i === 2,
+      shake: i === 2,
+      name: sk.name,
+    };
+  });
+  return config;
+}
+
+const P1_SKILLS = buildSkillConfig(p1Data.skills);
+const P2_SKILLS = buildSkillConfig(p2Data.skills);
+
+/* ==========================================================
+   PER-PLAYER HP
+   ========================================================== */
+let p1HP = p1Data.hp;
+let p2HP = p2Data.hp;
+const P1_MAX = p1Data.hp;
+const P2_MAX = p2Data.hp;
+
+const ENEMY_DELAY = 1500;   // ms before enemy auto-fires
+
+/* ==========================================================
+   SPECIAL ABILITY STATE
+   ========================================================== */
+const burnEffects = { p1: null, p2: null };
+let freezeNext = { p1: false, p2: false };
+const shieldTurns = { p1: null, p2: null };
+let boostNext = { p1: 0, p2: 0 };
+
+/* ==========================================================
+   STATE
+   ========================================================== */
+let playerTurn  = true;
+let started     = false;
+let over        = false;
+let busy        = false;       // animation lock
+let p1Tracked   = false;
+let p2Tracked   = false;
+
+const cachedPos = { p1: new THREE.Vector3(), p2: new THREE.Vector3() };
+
+/* ==========================================================
+   DOM
+   ========================================================== */
+const $ = (s) => document.querySelector(s);
+const statusEl  = $('#status');
+const hudEl     = $('#hud');
+const skillsEl  = $('#skills');
+const turnEl    = $('#turn-msg');
+const goEl      = $('#game-over');
+const flashEl   = $('#flash');
+const fpsEl     = $('#fps');
+const specialEl = $('#special-toast');
+
+/* ==========================================================
+   SET MONSTER NAMES IN HUD
+   ========================================================== */
+$('#p1-label').textContent = p1Data.name.toUpperCase();
+$('#p2-label').textContent = p2Data.name.toUpperCase();
+$('#p1-num').textContent = `${p1HP} / ${P1_MAX}`;
+$('#p2-num').textContent = `${p2HP} / ${P2_MAX}`;
+
+/* ==========================================================
+   MINDAR + THREE SETUP
+   ========================================================== */
+const mindar = new MindARThree({
+  container: $('#container'),
+  imageTargetSrc: 'https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/band-example/band.mind',
+  maxTrack: 2,
+  filterMinCF: 1,
+  filterBeta: 10000,
+  missTolerance: 5,
+  warmupTolerance: 5,
+});
+
+const { renderer, scene, camera } = mindar;
+
+// Lighting
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
+const dLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dLight.position.set(0, 5, 5);
+scene.add(dLight);
+
+/* ==========================================================
+   MONSTER CREATION (portrait texture or fallback cube)
+   ========================================================== */
+function makeMonster(cardData, fallbackColor) {
+  const group = new THREE.Group();
+  let mainMesh;
+
+  if (cardData.portrait) {
+    const tex = new THREE.TextureLoader().load(cardData.portrait);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+    mainMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.2), mat);
+  } else {
+    const mat = new THREE.MeshStandardMaterial({
+      color: fallbackColor, emissive: fallbackColor,
+      emissiveIntensity: 0.3, metalness: 0.3, roughness: 0.4,
+    });
+    mainMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), mat);
+  }
+
+  mainMesh.position.y = 0.1;
+  group.add(mainMesh);
+  group.userData = { mainMesh, alive: true, origColor: fallbackColor, origEmissive: fallbackColor };
+  return group;
+}
+
+const p1Mon = makeMonster(p1Data, 0xff3333);
+const p2Mon = makeMonster(p2Data, 0x3366ff);
+
+const a0 = mindar.addAnchor(0);
+const a1 = mindar.addAnchor(1);
+a0.group.add(p1Mon);
+a1.group.add(p2Mon);
+
+/* ==========================================================
+   TRACKING CALLBACKS
+   ========================================================== */
+a0.onTargetFound = () => { p1Tracked = true;  console.log('[TRACK] Card 1 FOUND'); onTrack(); };
+a0.onTargetLost  = () => { p1Tracked = false; console.log('[TRACK] Card 1 LOST');  onTrack(); };
+a1.onTargetFound = () => { p2Tracked = true;  console.log('[TRACK] Card 2 FOUND'); onTrack(); };
+a1.onTargetLost  = () => { p2Tracked = false; console.log('[TRACK] Card 2 LOST');  onTrack(); };
+
+function onTrack() {
+  if (p1Tracked && p2Tracked) {
+    cachePositions();
+    if (!started && !over) beginGame();
+  }
+  if (!started) {
+    if (!p1Tracked && !p2Tracked) statusEl.textContent = 'Point camera at both cards';
+    else if (p1Tracked && !p2Tracked) statusEl.textContent = 'Card 1 found — looking for Card 2...';
+    else if (!p1Tracked && p2Tracked) statusEl.textContent = 'Card 2 found — looking for Card 1...';
+  }
+}
+
+function cachePositions() {
+  a0.group.getWorldPosition(cachedPos.p1);
+  a1.group.getWorldPosition(cachedPos.p2);
+}
+
+/* ==========================================================
+   DYNAMIC SKILL BUTTONS
+   ========================================================== */
+function renderSkillButtons() {
+  const container = document.getElementById('skills');
+  container.innerHTML = '';
+  p1Data.skills.forEach((sk, i) => {
+    const key = i === 2 ? 'ultimate' : `skill${i}`;
+    const btn = document.createElement('button');
+    btn.className = 'skill-btn' + (i === 2 ? ' ultimate' : '');
+    btn.dataset.skill = key;
+    btn.style.background = `linear-gradient(135deg, ${sk.color}, ${darkenColor(sk.color, 0.4)})`;
+    btn.innerHTML = `${sk.name}<span class="skill-dmg">${sk.damage} DMG</span>`;
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (playerTurn && !busy && !over) attack(key, true);
+    });
+    container.appendChild(btn);
+  });
+}
+
+/* ==========================================================
+   GAME START
+   ========================================================== */
+function beginGame() {
+  console.log('[GAME] Both cards tracked — FIGHT START');
+  started = true;
+  statusEl.style.opacity = '0';
+  hudEl.style.display = 'flex';
+  renderSkillButtons();
+  flash('FIGHT!', 1000, () => {
+    playerTurn = true;
+    setSkills(true);
+    flash('Your Turn', 800);
+  });
+}
+
+/* ==========================================================
+   UI HELPERS
+   ========================================================== */
+function syncHP() {
+  const pct1 = Math.max(0, p1HP / P1_MAX * 100);
+  const pct2 = Math.max(0, p2HP / P2_MAX * 100);
+  $('#p1-fill').style.width = pct1 + '%';
+  $('#p2-fill').style.width = pct2 + '%';
+  $('#p1-num').textContent = `${Math.max(0, p1HP)} / ${P1_MAX}`;
+  $('#p2-num').textContent = `${Math.max(0, p2HP)} / ${P2_MAX}`;
+}
+
+function setSkills(on) {
+  skillsEl.style.display = on ? 'flex' : 'none';
+  skillsEl.querySelectorAll('button').forEach(b => b.disabled = !on);
+}
+
+function flash(text, ms, cb) {
+  turnEl.textContent = text;
+  turnEl.style.opacity = '1';
+  setTimeout(() => {
+    turnEl.style.opacity = '0';
+    setTimeout(() => { if (cb) cb(); }, 260);
+  }, ms);
+}
+
+function showSpecialToast(name) {
+  specialEl.textContent = `${name} activated!`;
+  specialEl.style.opacity = '1';
+  setTimeout(() => { specialEl.style.opacity = '0'; }, 1200);
+}
+
+function dmgNumber(val, worldPos, color) {
+  const v = worldPos.clone().project(camera);
+  const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+  const el = document.createElement('div');
+  el.className = 'dmg-float';
+  el.textContent = `-${val}`;
+  el.style.cssText = `left:${x}px;top:${y}px;color:#${new THREE.Color(color).getHexString()}`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 950);
+}
+
+function statusFloat(text, worldPos) {
+  const v = worldPos.clone().project(camera);
+  const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-v.y * 0.5 + 0.5) * window.innerHeight - 30;
+  const el = document.createElement('div');
+  el.className = 'status-float';
+  el.textContent = text;
+  el.style.cssText = `left:${x}px;top:${y}px;`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1250);
+}
+
+function screenFlash() {
+  flashEl.style.opacity = '0.5';
+  setTimeout(() => (flashEl.style.opacity = '0'), 120);
+}
+
+/* ==========================================================
+   PROJECTILE SYSTEM
+   ========================================================== */
+const projectiles = [];
+
+function spawnProjectile(from, to, cfg, onHit) {
+  const mat = new THREE.MeshBasicMaterial({ color: cfg.color });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(cfg.size, 12, 12), mat);
+  mesh.position.copy(from);
+  scene.add(mesh);
+
+  const glow = new THREE.PointLight(cfg.color, 2, 0.5);
+  mesh.add(glow);
+
+  projectiles.push({
+    mesh, glow, from: from.clone(), to: to.clone(),
+    t0: performance.now(), dur: cfg.duration,
+    color: cfg.color, size: cfg.size,
+    trails: [], onHit, dead: false,
+  });
+}
+
+function tickProjectiles(now) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    if (p.dead) continue;
+
+    const t = Math.min((now - p.t0) / p.dur, 1);
+    const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+    p.mesh.position.lerpVectors(p.from, p.to, ease);
+    p.mesh.scale.setScalar(1 + 0.2 * Math.sin(t * Math.PI * 8));
+
+    // trail
+    if (t < 0.9 && Math.random() < 0.6) {
+      const tm = new THREE.Mesh(
+        new THREE.SphereGeometry(p.size * 0.25, 6, 6),
+        new THREE.MeshBasicMaterial({ color: p.color, transparent: true, opacity: 0.5 })
+      );
+      tm.position.copy(p.mesh.position);
+      scene.add(tm);
+      p.trails.push({ m: tm, born: now });
+    }
+
+    // fade trails
+    for (let j = p.trails.length - 1; j >= 0; j--) {
+      const age = (now - p.trails[j].born) / 250;
+      if (age >= 1) { dispose(p.trails[j].m); p.trails.splice(j, 1); }
+      else { p.trails[j].m.material.opacity = 0.5 * (1 - age); p.trails[j].m.scale.setScalar(1 - age * 0.6); }
+    }
+
+    // arrive
+    if (t >= 1) {
+      dispose(p.mesh);
+      p.trails.forEach(tr => dispose(tr.m));
+      p.dead = true;
+      projectiles.splice(i, 1);
+      if (p.onHit) p.onHit();
+    }
+  }
+}
+
+function dispose(mesh) {
+  scene.remove(mesh);
+  mesh.geometry?.dispose();
+  if (mesh.material) mesh.material.dispose?.();
+}
+
+/* ==========================================================
+   ANIMATIONS (adapted for group + mainMesh)
+   ========================================================== */
+function animCast(mon) {
+  const mainMesh = mon.userData.mainMesh;
+  return new Promise(r => {
+    const s0 = mainMesh.scale.clone();
+    const t0 = performance.now();
+    (function tick() {
+      const t = (performance.now() - t0) / 280;
+      if (t >= 1) { mainMesh.scale.copy(s0); return r(); }
+      const s = 1 + 0.35 * Math.sin(t * Math.PI);
+      mainMesh.scale.set(s0.x * s, s0.y * s, s0.z * s);
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+
+function animHit(mon) {
+  const mainMesh = mon.userData.mainMesh;
+  return new Promise(r => {
+    const { origColor, origEmissive } = mon.userData;
+    // Only apply color changes for MeshStandardMaterial (cube fallback)
+    const hasMaterial = mainMesh.material && mainMesh.material.color && mainMesh.material.emissive;
+    if (hasMaterial) {
+      mainMesh.material.color.set(0xff0000);
+      mainMesh.material.emissive.set(0xff0000);
+      mainMesh.material.emissiveIntensity = 1;
+    }
+    const p0 = mainMesh.position.clone();
+    const t0 = performance.now();
+    (function tick() {
+      const t = (performance.now() - t0) / 350;
+      if (t >= 1) {
+        if (hasMaterial) {
+          mainMesh.material.color.set(origColor);
+          mainMesh.material.emissive.set(origEmissive);
+          mainMesh.material.emissiveIntensity = 0.3;
+        }
+        mainMesh.position.copy(p0);
+        return r();
+      }
+      mainMesh.position.x = p0.x + (Math.random() - 0.5) * 0.02;
+      mainMesh.position.z = p0.z + (Math.random() - 0.5) * 0.02;
+      if (hasMaterial && t > 0.5) {
+        const f = (t - 0.5) / 0.5;
+        mainMesh.material.emissiveIntensity = 1 - f * 0.7;
+      }
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+
+function animDeath(mon) {
+  const mainMesh = mon.userData.mainMesh;
+  return new Promise(r => {
+    mon.userData.alive = false;
+    const bits = [];
+    const deathColor = mainMesh.material.color
+      ? mainMesh.material.color.getHex()
+      : mon.userData.origColor;
+    for (let i = 0; i < 20; i++) {
+      const m = new THREE.Mesh(
+        new THREE.SphereGeometry(0.015, 6, 6),
+        new THREE.MeshBasicMaterial({ color: deathColor, transparent: true, opacity: 1 })
+      );
+      m.position.copy(mainMesh.position);
+      mon.add(m);
+      bits.push({
+        m,
+        v: new THREE.Vector3((Math.random() - 0.5) * 0.5, Math.random() * 0.35, (Math.random() - 0.5) * 0.5),
+      });
+    }
+    const t0 = performance.now();
+    (function tick() {
+      const t = (performance.now() - t0) / 750;
+      if (t >= 1) {
+        mainMesh.scale.set(0, 0, 0);
+        bits.forEach(b => dispose(b.m));
+        return r();
+      }
+      mainMesh.scale.setScalar(1 - t);
+      mainMesh.rotation.y += 0.12;
+      bits.forEach(b => {
+        b.m.position.addScaledVector(b.v, 0.016);
+        b.v.y -= 0.006;
+        b.m.material.opacity = 1 - t;
+      });
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+
+/* ==========================================================
+   SPECIAL ABILITIES
+   ========================================================== */
+function applySpecial(isP1) {
+  const data = isP1 ? p1Data : p2Data;
+  const sa = data.specialAbility;
+  if (!sa || Math.random() > 0.3) return null;
+
+  const attacker = isP1 ? 'p1' : 'p2';
+  const defender = isP1 ? 'p2' : 'p1';
+
+  switch (sa.mechanic) {
+    case 'drain': {
+      if (isP1) { p1HP = Math.min(p1HP + sa.value, P1_MAX); }
+      else { p2HP = Math.min(p2HP + sa.value, P2_MAX); }
+      syncHP();
+      return sa.name;
+    }
+    case 'burn': {
+      burnEffects[defender] = { remaining: 3, damage: sa.value };
+      return sa.name;
+    }
+    case 'freeze': {
+      freezeNext[defender] = true;
+      return sa.name;
+    }
+    case 'shield': {
+      shieldTurns[attacker] = { remaining: 3, reduction: sa.value };
+      return sa.name;
+    }
+    case 'boost': {
+      boostNext[attacker] = sa.value;
+      return sa.name;
+    }
+  }
+  return null;
+}
+
+function processBurn(who) {
+  const burn = burnEffects[who];
+  if (!burn || burn.remaining <= 0) return;
+
+  const worldPos = who === 'p1' ? cachedPos.p1 : cachedPos.p2;
+  if (who === 'p1') {
+    p1HP -= burn.damage;
+    console.log(`[BURN] P1 takes ${burn.damage} burn damage`);
+  } else {
+    p2HP -= burn.damage;
+    console.log(`[BURN] P2 takes ${burn.damage} burn damage`);
+  }
+  syncHP();
+  statusFloat(`Burn -${burn.damage}`, worldPos);
+
+  burn.remaining--;
+  if (burn.remaining <= 0) burnEffects[who] = null;
+}
+
+function checkFreeze(who) {
+  if (freezeNext[who]) {
+    freezeNext[who] = false;
+    const worldPos = who === 'p1' ? cachedPos.p1 : cachedPos.p2;
+    statusFloat('Frozen! Skip turn', worldPos);
+    console.log(`[FREEZE] ${who.toUpperCase()} is frozen, skipping turn`);
+    return true;
+  }
+  return false;
+}
+
+/* ==========================================================
+   ENEMY AI
+   ========================================================== */
+function enemyPickSkill() {
+  const keys = Object.keys(P2_SKILLS);
+  if (Math.random() < 0.3 && P2_SKILLS.ultimate) return 'ultimate';
+  const normals = keys.filter(k => k !== 'ultimate');
+  return normals[Math.floor(Math.random() * normals.length)];
+}
+
+/* ==========================================================
+   COMBAT
+   ========================================================== */
+async function attack(skillKey, isP1) {
+  if (busy || over) return;
+  busy = true;
+  setSkills(false);
+
+  const cfg  = isP1 ? P1_SKILLS[skillKey] : P2_SKILLS[skillKey];
+  console.log(`[COMBAT] ${isP1 ? 'P1' : 'P2'} uses ${cfg.name} (${cfg.damage} dmg)`);
+
+  const atkr = isP1 ? p1Mon : p2Mon;
+  const defr = isP1 ? p2Mon : p1Mon;
+  const from = (isP1 ? cachedPos.p1 : cachedPos.p2).clone();
+  const to   = (isP1 ? cachedPos.p2 : cachedPos.p1).clone();
+  from.y += 0.1;
+  to.y   += 0.1;
+
+  await animCast(atkr);
+
+  await new Promise(done => {
+    spawnProjectile(from, to, cfg, async () => {
+      if (cfg.flash) screenFlash();
+
+      // Calculate actual damage with shield and boost modifiers
+      let dmg = cfg.damage;
+      const attacker = isP1 ? 'p1' : 'p2';
+      const defender = isP1 ? 'p2' : 'p1';
+
+      // Apply boost
+      if (boostNext[attacker] > 0) {
+        dmg += boostNext[attacker];
+        console.log(`[BOOST] ${attacker.toUpperCase()} boosted +${boostNext[attacker]} dmg`);
+        boostNext[attacker] = 0;
+      }
+
+      // Apply shield reduction on defender
+      if (shieldTurns[defender] && shieldTurns[defender].remaining > 0) {
+        dmg = Math.max(0, dmg - shieldTurns[defender].reduction);
+        console.log(`[SHIELD] ${defender.toUpperCase()} reduces damage by ${shieldTurns[defender].reduction}`);
+        shieldTurns[defender].remaining--;
+        if (shieldTurns[defender].remaining <= 0) shieldTurns[defender] = null;
+      }
+
+      if (isP1) p2HP -= dmg; else p1HP -= dmg;
+      console.log(`[HP] P1: ${p1HP}/${P1_MAX} | P2: ${p2HP}/${P2_MAX}`);
+      syncHP();
+      dmgNumber(dmg, to, cfg.color);
+
+      // Apply special ability (30% chance)
+      const specialName = applySpecial(isP1);
+      if (specialName) {
+        console.log(`[SPECIAL] ${specialName} triggered by ${isP1 ? 'P1' : 'P2'}`);
+        showSpecialToast(specialName);
+      }
+
+      const dead = isP1 ? p2HP <= 0 : p1HP <= 0;
+      if (dead) {
+        console.log(`[GAME] ${isP1 ? 'P2' : 'P1'} DEFEATED — ${isP1 ? 'VICTORY' : 'DEFEAT'}`);
+        await animDeath(defr);
+        over = true;
+        $('#go-title').textContent = isP1 ? 'VICTORY!' : 'DEFEAT!';
+        $('#go-title').style.color = isP1 ? '#ffaa00' : '#ff4444';
+        $('#go-sub').textContent   = isP1 ? `${p1Data.name} wins!` : `${p2Data.name} wins...`;
+        goEl.style.display = 'flex';
+      } else {
+        await animHit(defr);
+      }
+      done();
+    });
+  });
+
+  busy = false;
+  if (over) return;
+
+  if (isP1) {
+    // Transition to enemy turn
+    playerTurn = false;
+    flash('Enemy Turn', 800, () => {
+      // Process burn on P2 at start of their turn
+      processBurn('p2');
+      if (p2HP <= 0) {
+        over = true;
+        animDeath(p2Mon).then(() => {
+          $('#go-title').textContent = 'VICTORY!';
+          $('#go-title').style.color = '#ffaa00';
+          $('#go-sub').textContent = `${p1Data.name} wins!`;
+          goEl.style.display = 'flex';
+        });
+        return;
+      }
+      // Check freeze on P2
+      if (checkFreeze('p2')) {
+        setTimeout(() => {
+          playerTurn = true;
+          flash('Your Turn', 800, () => {
+            processBurn('p1');
+            if (p1HP <= 0) {
+              over = true;
+              animDeath(p1Mon).then(() => {
+                $('#go-title').textContent = 'DEFEAT!';
+                $('#go-title').style.color = '#ff4444';
+                $('#go-sub').textContent = `${p2Data.name} wins...`;
+                goEl.style.display = 'flex';
+              });
+              return;
+            }
+            if (checkFreeze('p1')) {
+              // P1 frozen, skip back to enemy
+              setTimeout(() => attack(enemyPickSkill(), false), ENEMY_DELAY);
+            } else {
+              setSkills(true);
+            }
+          });
+        }, 1200);
+        return;
+      }
+      setTimeout(() => attack(enemyPickSkill(), false), ENEMY_DELAY);
+    });
+  } else {
+    // Transition to player turn
+    playerTurn = true;
+    flash('Your Turn', 800, () => {
+      // Process burn on P1 at start of their turn
+      processBurn('p1');
+      if (p1HP <= 0) {
+        over = true;
+        animDeath(p1Mon).then(() => {
+          $('#go-title').textContent = 'DEFEAT!';
+          $('#go-title').style.color = '#ff4444';
+          $('#go-sub').textContent = `${p2Data.name} wins...`;
+          goEl.style.display = 'flex';
+        });
+        return;
+      }
+      // Check freeze on P1
+      if (checkFreeze('p1')) {
+        setTimeout(() => {
+          playerTurn = false;
+          flash('Enemy Turn', 800, () => {
+            processBurn('p2');
+            if (p2HP <= 0) {
+              over = true;
+              animDeath(p2Mon).then(() => {
+                $('#go-title').textContent = 'VICTORY!';
+                $('#go-title').style.color = '#ffaa00';
+                $('#go-sub').textContent = `${p1Data.name} wins!`;
+                goEl.style.display = 'flex';
+              });
+              return;
+            }
+            if (checkFreeze('p2')) {
+              setTimeout(() => {
+                playerTurn = true;
+                flash('Your Turn', 800, () => setSkills(true));
+              }, 1200);
+              return;
+            }
+            setTimeout(() => attack(enemyPickSkill(), false), ENEMY_DELAY);
+          });
+        }, 1200);
+        return;
+      }
+      setSkills(true);
+    });
+  }
+}
+
+/* ==========================================================
+   IDLE BOB (adapted for group + mainMesh)
+   ========================================================== */
+function bob(mon, t) {
+  if (!mon.userData.alive) return;
+  const mainMesh = mon.userData.mainMesh;
+  mainMesh.position.y = 0.1 + Math.sin(t * 2) * 0.008;
+  mainMesh.rotation.y += 0.004;
+}
+
+/* ==========================================================
+   FPS + DEBUG SHORTCUT (tap FPS counter 3x to instant-kill enemy)
+   ========================================================== */
+let frames = 0, lastFps = performance.now();
+let debugTaps = 0, debugTimer = null;
+fpsEl.style.pointerEvents = 'auto';
+fpsEl.addEventListener('click', () => {
+  debugTaps++;
+  clearTimeout(debugTimer);
+  debugTimer = setTimeout(() => (debugTaps = 0), 800);
+  if (debugTaps >= 3 && started && !over) {
+    console.log('[DEBUG] Instant kill triggered');
+    debugTaps = 0;
+    p2HP = 0;
+    syncHP();
+    animDeath(p2Mon).then(() => {
+      over = true;
+      $('#go-title').textContent = 'VICTORY!';
+      $('#go-title').style.color = '#ffaa00';
+      $('#go-sub').textContent = 'DEBUG: instant kill';
+      goEl.style.display = 'flex';
+    });
+  }
+});
+
+/* ==========================================================
+   LIVE RELOAD (polls server for file changes)
+   ========================================================== */
+(function liveReload() {
+  let lastMod = null;
+  setInterval(async () => {
+    try {
+      const res = await fetch('/battle.html', { method: 'HEAD' });
+      const mod = res.headers.get('last-modified');
+      if (lastMod && mod !== lastMod) location.reload();
+      lastMod = mod;
+    } catch {}
+  }, 1500);
+})();
+
+/* ==========================================================
+   MAIN LOOP
+   ========================================================== */
+async function init() {
+  try {
+    console.log('[INIT] Starting MindAR...');
+    statusEl.textContent = 'Starting camera...';
+    await mindar.start();
+    console.log('[INIT] MindAR started, camera active');
+    statusEl.textContent = 'Point camera at both cards';
+
+    renderer.setAnimationLoop(() => {
+      const now = performance.now();
+
+      tickProjectiles(now);
+      bob(p1Mon, now / 1000);
+      bob(p2Mon, now / 1000);
+
+      if (p1Tracked && p2Tracked && started) cachePositions();
+
+      frames++;
+      if (now - lastFps >= 1000) {
+        fpsEl.textContent = frames + ' FPS';
+        frames = 0;
+        lastFps = now;
+      }
+
+      renderer.render(scene, camera);
+    });
+  } catch (err) {
+    console.error('MindAR error:', err);
+    statusEl.textContent = 'Camera error: ' + (err?.message || 'Camera permission denied. Reload and allow access.');
+  }
+}
+
+init();
+</script>
+</body>
+</html>

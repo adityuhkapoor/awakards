@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Awakards — Create Monster</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh; padding: 20px 16px 40px;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* --- Header --- */
+    .header { text-align: center; margin-bottom: 28px; }
+    .header h1 {
+      font-size: 28px; font-weight: 900; letter-spacing: 2px;
+      background: linear-gradient(135deg, #ffaa00, #ff6600);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .header .subtitle {
+      font-size: 14px; color: #888; margin-top: 4px; font-weight: 600;
+    }
+
+    /* --- Sections --- */
+    .section { margin-bottom: 24px; }
+    .section-label {
+      font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase;
+      letter-spacing: 1.5px; margin-bottom: 10px;
+    }
+
+    /* --- Photo capture --- */
+    #file-input { display: none; }
+    .capture-row { display: flex; align-items: center; gap: 14px; }
+    .capture-btn {
+      background: linear-gradient(135deg, #333, #222); border: 2px solid #444;
+      color: #fff; font-size: 15px; font-weight: 700; padding: 14px 28px;
+      border-radius: 14px; cursor: pointer; transition: transform 0.1s;
+      min-height: 48px;
+    }
+    .capture-btn:active { transform: scale(0.95); }
+    .capture-btn.has-photo { border-color: #22cc44; color: #22cc44; }
+    #preview {
+      width: 64px; height: 64px; border-radius: 10px; object-fit: cover;
+      border: 2px solid #333; display: none; flex-shrink: 0;
+    }
+
+    /* --- Stat selectors --- */
+    .btn-group { display: flex; gap: 8px; margin-bottom: 14px; }
+    .btn-group-label {
+      font-size: 13px; font-weight: 600; color: #aaa; margin-bottom: 6px;
+    }
+    .tier-btn {
+      flex: 1; padding: 12px 0; border: 2px solid #333; border-radius: 12px;
+      background: #1a1a1a; color: #888; font-size: 14px; font-weight: 700;
+      cursor: pointer; transition: all 0.15s; min-height: 44px;
+    }
+    .tier-btn:active { transform: scale(0.95); }
+    .tier-btn.selected {
+      border-color: #ffaa00; color: #ffaa00; background: #2a2200;
+    }
+
+    .ability-input {
+      width: 100%; padding: 14px 16px; border: 2px solid #333; border-radius: 12px;
+      background: #1a1a1a; color: #fff; font-size: 15px; font-family: inherit;
+      outline: none; min-height: 44px;
+    }
+    .ability-input::placeholder { color: #555; }
+    .ability-input:focus { border-color: #ffaa00; }
+
+    /* --- Forge button --- */
+    .forge-btn {
+      display: block; width: 100%; padding: 18px; border: none; border-radius: 16px;
+      font-size: 18px; font-weight: 900; letter-spacing: 2px; cursor: pointer;
+      color: #fff; transition: all 0.15s;
+      background: linear-gradient(135deg, #ffaa00, #ff6600);
+      box-shadow: 0 4px 20px rgba(255, 170, 0, 0.3);
+      min-height: 56px;
+    }
+    .forge-btn:active { transform: scale(0.97); }
+    .forge-btn:disabled {
+      background: linear-gradient(135deg, #333, #222);
+      box-shadow: none; color: #555; cursor: not-allowed;
+    }
+
+    /* --- Loading state --- */
+    .loading-area {
+      display: none; text-align: center; padding: 40px 0;
+    }
+    .loading-area.active { display: block; }
+    .loading-text {
+      font-size: 18px; font-weight: 700; color: #ffaa00;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .loading-sub {
+      font-size: 13px; color: #666; margin-top: 8px;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+    .loading-spinner {
+      width: 48px; height: 48px; border: 4px solid #333; border-top-color: #ffaa00;
+      border-radius: 50%; margin: 0 auto 16px;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* --- Card result --- */
+    .card-area { display: none; }
+    .card-area.active { display: block; }
+
+    .monster-card {
+      width: 100%; max-width: 360px; margin: 0 auto;
+      border-radius: 20px; overflow: hidden;
+      position: relative;
+    }
+    .card-border {
+      padding: 4px; border-radius: 20px;
+    }
+    .card-inner {
+      background: #1a1a1a; border-radius: 17px; overflow: hidden;
+    }
+
+    /* Card header */
+    .card-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 16px 10px;
+    }
+    .card-name {
+      font-size: 22px; font-weight: 900; color: #fff;
+    }
+    .card-hp {
+      font-size: 14px; font-weight: 800; color: #ff4444;
+      background: rgba(255, 68, 68, 0.12); padding: 4px 10px; border-radius: 8px;
+    }
+    .card-hp span { font-size: 10px; color: #ff6666; margin-right: 2px; }
+
+    /* Type badge */
+    .card-type-badge {
+      display: inline-block; margin: 0 16px 10px;
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.5px; padding: 4px 12px; border-radius: 6px;
+      color: #fff;
+    }
+
+    /* Portrait */
+    .card-portrait-wrap {
+      width: calc(100% - 24px); margin: 0 12px 12px;
+      aspect-ratio: 4 / 3; border-radius: 12px; overflow: hidden;
+      background: #222; position: relative;
+    }
+    .card-portrait-wrap img {
+      width: 100%; height: 100%; object-fit: cover; display: none;
+    }
+    .card-portrait-placeholder {
+      position: absolute; inset: 0; display: flex; align-items: center;
+      justify-content: center; color: #555; font-size: 13px; font-weight: 600;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    /* Skills */
+    .card-skills { padding: 0 12px 8px; }
+    .card-skill-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; margin-bottom: 6px; background: #222;
+      border-radius: 10px;
+    }
+    .card-skill-row.ultimate-row { border: 1px solid rgba(255, 170, 0, 0.25); }
+    .card-skill-left { display: flex; align-items: center; gap: 10px; flex: 1; }
+    .card-skill-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }
+    .card-skill-name { font-size: 14px; font-weight: 700; }
+    .card-skill-desc { font-size: 10px; color: #777; margin-top: 1px; }
+    .card-skill-dmg {
+      font-size: 16px; font-weight: 900; color: #ff6644; flex-shrink: 0;
+      min-width: 36px; text-align: right;
+    }
+
+    /* Special ability */
+    .card-special {
+      margin: 0 12px 12px; padding: 10px 14px; border-radius: 10px;
+      background: #1e1e2a; border: 1px solid #333;
+    }
+    .card-special-label {
+      font-size: 10px; font-weight: 700; color: #666; text-transform: uppercase;
+      letter-spacing: 1px; margin-bottom: 4px;
+    }
+    .card-special-text { font-size: 12px; color: #bbb; line-height: 1.4; }
+
+    /* Card footer (attack stat) */
+    .card-footer {
+      display: flex; justify-content: flex-end; align-items: center;
+      padding: 8px 16px 14px; gap: 6px;
+    }
+    .card-atk-label { font-size: 10px; color: #666; font-weight: 700; text-transform: uppercase; }
+    .card-atk-val { font-size: 18px; font-weight: 900; color: #ffaa00; }
+
+    /* --- Save section --- */
+    .save-area { display: none; text-align: center; margin-top: 24px; }
+    .save-area.active { display: block; }
+
+    .save-btn {
+      display: block; width: 100%; max-width: 360px; margin: 0 auto 16px;
+      padding: 16px; border: none; border-radius: 14px;
+      font-size: 16px; font-weight: 800; letter-spacing: 1px; cursor: pointer;
+      color: #111; background: linear-gradient(135deg, #22cc44, #00aa33);
+      box-shadow: 0 4px 16px rgba(34, 204, 68, 0.3);
+      min-height: 52px; transition: transform 0.1s;
+    }
+    .save-btn:active { transform: scale(0.97); }
+    .save-btn:disabled { background: #333; color: #666; box-shadow: none; cursor: not-allowed; }
+
+    .saved-msg {
+      display: none; font-size: 14px; color: #22cc44; font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .saved-msg.active { display: block; }
+
+    .nav-links { display: none; flex-direction: column; gap: 12px; align-items: center; }
+    .nav-links.active { display: flex; }
+    .nav-link {
+      font-size: 15px; font-weight: 700; color: #ffaa00; text-decoration: none;
+      padding: 12px 24px; border: 2px solid #ffaa0044; border-radius: 12px;
+      transition: all 0.15s; min-height: 44px;
+      display: flex; align-items: center;
+    }
+    .nav-link:active { transform: scale(0.97); background: rgba(255, 170, 0, 0.08); }
+    .nav-link.battle-link {
+      background: linear-gradient(135deg, #ffaa00, #ff6600);
+      color: #fff; border: none;
+      box-shadow: 0 4px 16px rgba(255, 170, 0, 0.3);
+    }
+
+    /* --- Type colors --- */
+    .type-fire { background: #ff4400; }
+    .type-ice { background: #0099ff; }
+    .type-lightning { background: #ffcc00; color: #333; }
+    .type-shadow { background: #8833cc; }
+    .type-nature { background: #22cc44; }
+
+    .border-fire { background: linear-gradient(135deg, #ff4400, #cc2200); }
+    .border-ice { background: linear-gradient(135deg, #0099ff, #0066cc); }
+    .border-lightning { background: linear-gradient(135deg, #ffcc00, #ffaa00); }
+    .border-shadow { background: linear-gradient(135deg, #8833cc, #6622aa); }
+    .border-nature { background: linear-gradient(135deg, #22cc44, #11aa33); }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>AWAKARDS</h1>
+  <div class="subtitle" id="player-subtitle">Player 1's Monster</div>
+</div>
+
+<!-- PHOTO CAPTURE -->
+<div class="section" id="section-capture">
+  <div class="section-label">Step 1 -- Draw &amp; Photograph</div>
+  <div class="capture-row">
+    <button class="capture-btn" id="capture-btn">Take Photo</button>
+    <img id="preview" alt="Preview">
+  </div>
+  <input type="file" id="file-input" accept="image/*" capture="environment">
+</div>
+
+<!-- STAT SELECTORS -->
+<div class="section" id="section-stats">
+  <div class="section-label">Step 2 -- Choose Stats</div>
+
+  <div class="btn-group-label">Health</div>
+  <div class="btn-group" data-stat="health">
+    <button class="tier-btn" data-val="Low">Low</button>
+    <button class="tier-btn selected" data-val="Medium">Med</button>
+    <button class="tier-btn" data-val="High">High</button>
+  </div>
+
+  <div class="btn-group-label">Attack</div>
+  <div class="btn-group" data-stat="attack">
+    <button class="tier-btn" data-val="Low">Low</button>
+    <button class="tier-btn selected" data-val="Medium">Med</button>
+    <button class="tier-btn" data-val="High">High</button>
+  </div>
+
+  <div class="btn-group-label">Special Ability</div>
+  <input class="ability-input" id="ability-input" type="text" placeholder="e.g. Drain, Shield, Burn" maxlength="60">
+</div>
+
+<!-- FORGE BUTTON -->
+<div class="section" id="section-forge">
+  <button class="forge-btn" id="forge-btn" disabled>FORGE MONSTER</button>
+</div>
+
+<!-- LOADING STATE -->
+<div class="loading-area" id="loading-area">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">Forging your monster...</div>
+  <div class="loading-sub" id="loading-sub">Gemini is analyzing your drawing</div>
+</div>
+
+<!-- CARD RESULT -->
+<div class="card-area" id="card-area">
+  <div class="monster-card" id="monster-card">
+    <div class="card-border" id="card-border">
+      <div class="card-inner">
+        <!-- Card header: name + HP -->
+        <div class="card-header">
+          <div class="card-name" id="card-name">---</div>
+          <div class="card-hp"><span>HP</span> <span id="card-hp-val">0</span></div>
+        </div>
+
+        <!-- Type badge -->
+        <div>
+          <span class="card-type-badge" id="card-type-badge">---</span>
+        </div>
+
+        <!-- Portrait -->
+        <div class="card-portrait-wrap" id="portrait-wrap">
+          <div class="card-portrait-placeholder" id="portrait-placeholder">Generating art...</div>
+          <img id="card-portrait" alt="Monster portrait">
+        </div>
+
+        <!-- Skills -->
+        <div class="card-skills" id="card-skills"></div>
+
+        <!-- Special ability -->
+        <div class="card-special" id="card-special">
+          <div class="card-special-label">Special Ability</div>
+          <div class="card-special-text" id="card-special-text">---</div>
+        </div>
+
+        <!-- Footer: attack -->
+        <div class="card-footer">
+          <span class="card-atk-label">ATK</span>
+          <span class="card-atk-val" id="card-atk-val">0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SAVE SECTION -->
+<div class="save-area" id="save-area">
+  <button class="save-btn" id="save-btn">SAVE CARD</button>
+  <div class="saved-msg" id="saved-msg">Card saved!</div>
+  <div class="nav-links" id="nav-links">
+    <a class="nav-link" id="other-player-link" href="#">Create Player 2's card</a>
+    <a class="nav-link battle-link" href="battle.html">Go to Battle &rarr;</a>
+  </div>
+</div>
+
+<script>
+/* ==========================================================
+   URL PARAMS
+   ========================================================== */
+const params = new URLSearchParams(window.location.search);
+const playerNum = params.get('player') === '2' ? 2 : 1;
+const otherNum = playerNum === 1 ? 2 : 1;
+
+document.getElementById('player-subtitle').textContent = `Player ${playerNum}'s Monster`;
+document.title = `Awakards — Player ${playerNum} Create`;
+
+const otherLink = document.getElementById('other-player-link');
+otherLink.textContent = `Create Player ${otherNum}'s card`;
+otherLink.href = `create.html?player=${otherNum}`;
+
+/* ==========================================================
+   DOM REFS
+   ========================================================== */
+const fileInput = document.getElementById('file-input');
+const captureBtn = document.getElementById('capture-btn');
+const preview = document.getElementById('preview');
+const forgeBtn = document.getElementById('forge-btn');
+const loadingArea = document.getElementById('loading-area');
+const loadingSub = document.getElementById('loading-sub');
+const cardArea = document.getElementById('card-area');
+const saveArea = document.getElementById('save-area');
+const saveBtn = document.getElementById('save-btn');
+const savedMsg = document.getElementById('saved-msg');
+const navLinks = document.getElementById('nav-links');
+const abilityInput = document.getElementById('ability-input');
+
+/* ==========================================================
+   STATE
+   ========================================================== */
+let photoFile = null;
+let photoBase64 = null;
+let currentMonster = null;
+
+const selected = { health: 'Medium', attack: 'Medium' };
+
+/* ==========================================================
+   TYPE COLOR MAP
+   ========================================================== */
+const TYPE_COLORS = {
+  fire:      '#ff4400',
+  ice:       '#0099ff',
+  lightning: '#ffcc00',
+  shadow:    '#8833cc',
+  nature:    '#22cc44',
+};
+
+function getTypeColor(type) {
+  return TYPE_COLORS[(type || '').toLowerCase()] || '#888888';
+}
+
+function getTypeBorderClass(type) {
+  const t = (type || '').toLowerCase();
+  if (TYPE_COLORS[t]) return 'border-' + t;
+  return '';
+}
+
+function getTypeBadgeClass(type) {
+  const t = (type || '').toLowerCase();
+  if (TYPE_COLORS[t]) return 'type-' + t;
+  return '';
+}
+
+/* ==========================================================
+   PHOTO CAPTURE
+   ========================================================== */
+captureBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  photoFile = file;
+
+  // Show preview
+  const previewReader = new FileReader();
+  previewReader.onload = (ev) => {
+    preview.src = ev.target.result;
+    preview.style.display = 'block';
+  };
+  previewReader.readAsDataURL(file);
+
+  // Convert to base64
+  photoBase64 = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.readAsDataURL(file);
+  });
+
+  captureBtn.textContent = 'Retake Photo';
+  captureBtn.classList.add('has-photo');
+  forgeBtn.disabled = false;
+});
+
+/* ==========================================================
+   STAT SELECTOR BUTTONS
+   ========================================================== */
+document.querySelectorAll('.btn-group').forEach(group => {
+  const stat = group.dataset.stat;
+  group.querySelectorAll('.tier-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      group.querySelectorAll('.tier-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      selected[stat] = btn.dataset.val;
+    });
+  });
+});
+
+/* ==========================================================
+   FORGE MONSTER
+   ========================================================== */
+forgeBtn.addEventListener('click', async () => {
+  if (!photoBase64) return;
+
+  // Hide creation UI, show loading
+  document.getElementById('section-capture').style.display = 'none';
+  document.getElementById('section-stats').style.display = 'none';
+  document.getElementById('section-forge').style.display = 'none';
+  cardArea.classList.remove('active');
+  saveArea.classList.remove('active');
+  savedMsg.classList.remove('active');
+  navLinks.classList.remove('active');
+  saveBtn.disabled = false;
+  loadingArea.classList.add('active');
+  loadingSub.textContent = 'Gemini is analyzing your drawing';
+
+  const mime = photoFile.type || 'image/jpeg';
+  const specialText = abilityInput.value.trim() || '';
+
+  // Step 1: Call Gemini
+  let monster;
+  try {
+    const res = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: photoBase64,
+        mime: mime,
+        health: selected.health,
+        attack: selected.attack,
+        specialAbility: specialText,
+      }),
+    });
+    if (!res.ok) throw new Error('Gemini API error: ' + res.status);
+    monster = await res.json();
+    if (monster.error) throw new Error(monster.error);
+  } catch (err) {
+    loadingArea.classList.remove('active');
+    showCreationUI();
+    alert('Gemini error: ' + err.message);
+    return;
+  }
+
+  currentMonster = monster;
+
+  // Show card with stats immediately
+  loadingArea.classList.remove('active');
+  renderCard(monster);
+  cardArea.classList.add('active');
+  saveArea.classList.add('active');
+
+  // Step 2: Fire Imagen for portrait
+  loadingSub.textContent = 'Generating monster portrait...';
+  const portraitPlaceholder = document.getElementById('portrait-placeholder');
+  const portraitImg = document.getElementById('card-portrait');
+  portraitPlaceholder.style.display = 'flex';
+  portraitImg.style.display = 'none';
+
+  try {
+    const imgRes = await fetch('/api/imagen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: monster.description,
+        type: monster.type,
+      }),
+    });
+    if (!imgRes.ok) throw new Error('Imagen API error: ' + imgRes.status);
+    const imgData = await imgRes.json();
+    if (imgData.error) throw new Error(imgData.error);
+
+    monster.portrait = 'data:image/png;base64,' + imgData.image;
+    portraitImg.src = monster.portrait;
+    portraitImg.style.display = 'block';
+    portraitPlaceholder.style.display = 'none';
+
+    // Update currentMonster reference
+    currentMonster = monster;
+  } catch (err) {
+    portraitPlaceholder.textContent = 'Art generation failed';
+    portraitPlaceholder.style.animation = 'none';
+    console.error('Imagen error:', err);
+  }
+});
+
+/* ==========================================================
+   RENDER CARD
+   ========================================================== */
+function renderCard(monster) {
+  const type = (monster.type || 'fire').toLowerCase();
+  const color = getTypeColor(type);
+
+  // Card border gradient
+  const borderEl = document.getElementById('card-border');
+  borderEl.className = 'card-border';
+  const borderClass = getTypeBorderClass(type);
+  if (borderClass) {
+    borderEl.classList.add(borderClass);
+  } else {
+    borderEl.style.background = `linear-gradient(135deg, ${color}, ${color}88)`;
+  }
+
+  // Name
+  document.getElementById('card-name').textContent = monster.name || 'Unknown';
+
+  // HP
+  document.getElementById('card-hp-val').textContent = monster.hp || 0;
+
+  // Type badge
+  const badge = document.getElementById('card-type-badge');
+  badge.textContent = type.toUpperCase();
+  badge.className = 'card-type-badge';
+  const badgeClass = getTypeBadgeClass(type);
+  if (badgeClass) {
+    badge.classList.add(badgeClass);
+  } else {
+    badge.style.background = color;
+  }
+
+  // Skills
+  const skillsContainer = document.getElementById('card-skills');
+  skillsContainer.innerHTML = '';
+  const skills = monster.skills || [];
+  skills.forEach((skill, i) => {
+    const isUltimate = i === 2;
+    const row = document.createElement('div');
+    row.className = 'card-skill-row' + (isUltimate ? ' ultimate-row' : '');
+
+    const left = document.createElement('div');
+    left.className = 'card-skill-left';
+
+    const dot = document.createElement('div');
+    dot.className = 'card-skill-dot';
+    dot.style.background = skill.color || color;
+
+    const info = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'card-skill-name';
+    name.textContent = skill.name || 'Unknown';
+    info.appendChild(name);
+
+    if (skill.description) {
+      const desc = document.createElement('div');
+      desc.className = 'card-skill-desc';
+      desc.textContent = skill.description;
+      info.appendChild(desc);
+    }
+
+    left.appendChild(dot);
+    left.appendChild(info);
+
+    const dmg = document.createElement('div');
+    dmg.className = 'card-skill-dmg';
+    dmg.textContent = skill.damage || 0;
+
+    row.appendChild(left);
+    row.appendChild(dmg);
+    skillsContainer.appendChild(row);
+  });
+
+  // Special ability
+  const specialEl = document.getElementById('card-special');
+  const specialAbility = findSpecialAbility(monster);
+  if (specialAbility) {
+    specialEl.style.display = 'block';
+    document.getElementById('card-special-text').textContent = specialAbility;
+  } else {
+    specialEl.style.display = 'none';
+  }
+
+  // Attack
+  const atkVal = monster.attack || monster.stats?.attack || 0;
+  document.getElementById('card-atk-val').textContent = atkVal;
+
+  // Portrait placeholder
+  document.getElementById('portrait-placeholder').style.display = 'flex';
+  document.getElementById('portrait-placeholder').textContent = 'Generating art...';
+  document.getElementById('portrait-placeholder').style.animation = '';
+  document.getElementById('card-portrait').style.display = 'none';
+
+  // If portrait already exists (e.g. re-render), show it
+  if (monster.portrait) {
+    document.getElementById('card-portrait').src = monster.portrait;
+    document.getElementById('card-portrait').style.display = 'block';
+    document.getElementById('portrait-placeholder').style.display = 'none';
+  }
+}
+
+function findSpecialAbility(monster) {
+  const sa = monster.specialAbility || monster.special_ability;
+  if (sa && typeof sa === 'object') {
+    return `${sa.name}: ${sa.description}`;
+  }
+  if (sa && typeof sa === 'string') return sa;
+  return null;
+}
+
+/* ==========================================================
+   SHOW CREATION UI (on error / retry)
+   ========================================================== */
+function showCreationUI() {
+  document.getElementById('section-capture').style.display = '';
+  document.getElementById('section-stats').style.display = '';
+  document.getElementById('section-forge').style.display = '';
+}
+
+/* ==========================================================
+   SAVE CARD
+   ========================================================== */
+saveBtn.addEventListener('click', () => {
+  if (!currentMonster) return;
+  localStorage.setItem(`awakards_p${playerNum}`, JSON.stringify(currentMonster));
+  saveBtn.disabled = true;
+  savedMsg.classList.add('active');
+  navLinks.classList.add('active');
+});
+
+/* ==========================================================
+   LIVE RELOAD
+   ========================================================== */
+(function liveReload() {
+  let lastMod = null;
+  setInterval(async () => {
+    try {
+      const res = await fetch('/create.html', { method: 'HEAD' });
+      const mod = res.headers.get('last-modified');
+      if (lastMod && mod !== lastMod) location.reload();
+      lastMod = mod;
+    } catch {}
+  }, 1500);
+})();
+</script>
+</body>
+</html>

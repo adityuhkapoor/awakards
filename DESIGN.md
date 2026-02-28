@@ -1,94 +1,93 @@
-# Awakards — Gemini Integration Design Notes
+# Awakards — Design Notes
 
 ## Architecture
 
 ```
-Phone Camera → Photo capture screen
-    ↓
-Photo → Python proxy → Gemini 3 Vision API
-    ↓
-Structured JSON (monster name, type, stats, 3 abilities)
-    ↓
-Monster description → Python proxy → Imagen 4 API
-    ↓
-Generated monster portrait (displayed in UI)
-    ↓
-Both players scanned → AR battle with Gemini-generated monsters
+index.html (lobby)  →  create.html?player=1  →  create.html?player=2  →  battle.html
+                         ↓                        ↓
+                    /api/gemini              /api/gemini
+                    /api/imagen              /api/imagen
+                         ↓                        ↓
+                    localStorage              localStorage
+                    (awakards_p1)            (awakards_p2)
+                                                  ↓
+                                            battle.html reads both
+                                            from localStorage
 ```
 
-## Priority 1: Gemini Vision + Imagen 4 + Proxy
+## Pages
 
-### Proxy Server (`serve.py`)
-- Add `/api/gemini` POST endpoint — forwards image + prompt to Gemini API
-- Add `/api/imagen` POST endpoint — forwards text prompt to Imagen 4 API
-- Both use same GEMINI_API_KEY from env var
-- CORS headers already handled
+| Page | Purpose |
+|------|---------|
+| `index.html` | Lobby — shows P1/P2 card slots, create/battle links |
+| `create.html` | Card creation wizard — photo capture, stat input, AI generation |
+| `battle.html` | AR combat — MindAR tracking, dynamic skills, special abilities |
+| `cards.html` | Print AR target images for physical cards |
+| `test.html` | Standalone monster generator test (legacy) |
 
-### Game Flow Change
-1. **NEW: Scan Phase** — Player taps "Scan" → phone camera captures a photo (NOT MindAR, just a `<input type="file" capture="environment">` or canvas grab)
-2. **NEW: Summoning Phase** — Photo sent to Gemini → loading spinner "Analyzing..." → monster stats returned → Imagen generates portrait → "Your monster: [name]!" with portrait + stats displayed
-3. **EXISTING: Battle Phase** — Player places summoning card on table → AR activates → monster cube appears (later: replace cube with generated portrait as texture) → fight with Gemini-generated abilities
-4. P2 flow: either second player scans OR we auto-generate an enemy via Gemini text-only prompt
+## Card Data Schema (localStorage)
 
-### Gemini Vision Prompt
-```
-Analyze this image and create a fantasy battle monster inspired by it.
-Return JSON with this exact schema:
+Keys: `awakards_p1`, `awakards_p2`
+
+```json
 {
-  "name": string,           // creative monster name (2-3 words)
-  "type": string,           // one of: fire, ice, lightning, shadow, nature
-  "description": string,    // one sentence visual description
-  "hp": number,             // between 80-120
+  "name": "Inferno Stalker",
+  "type": "fire",
+  "description": "A serpentine beast wreathed in blue flame",
+  "hp": 95,
+  "attack": 25,
+  "specialAbility": {
+    "name": "Drain",
+    "description": "Steals 15 HP from enemy on hit",
+    "mechanic": "drain",
+    "value": 15
+  },
   "skills": [
-    {
-      "name": string,       // creative skill name
-      "damage": number,     // between 15-40
-      "color": string,      // hex color for projectile
-      "description": string // short flavor text
-    }
-    // exactly 3 skills, third should be an "ultimate" with 50-80 damage
-  ]
+    { "name": "Flame Lash", "damage": 20, "color": "#ff4400", "description": "A whip of fire" },
+    { "name": "Ember Wave", "damage": 28, "color": "#ff6600", "description": "A wave of embers" },
+    { "name": "Hellstorm", "damage": 55, "color": "#ffaa00", "description": "Rains fire from above" }
+  ],
+  "portrait": "data:image/png;base64,..."
 }
 ```
 
-### Imagen 4 Prompt
-Built from Gemini's response:
-```
-"Fantasy battle monster portrait: [description]. [type] elemental creature.
-Digital art style, dramatic lighting, game card art, detailed, vibrant colors.
-Black background."
-```
+## AI Stat Balancing
 
-### Technical Notes
-- Gemini structured output: use `response_mime_type: "application/json"` + `response_schema`
-- Imagen 4 model: `imagen-4.0-fast-generate-001` (faster, good enough for hackathon)
-- Image capture: `<input type="file" accept="image/*" capture="environment">` — works on all phones, no permissions hassle
-- API key: stored in `.env`, loaded by Python server, never exposed to browser
-- Monster portrait: displayed as HTML img during summoning, optionally mapped as Three.js texture on the cube during AR
+The Gemini prompt acts as "AI Game Master" with a ~200 point budget:
+- `HP + (attack * 4) + (special_value * 2) ≈ 200`
+- Health tiers: Low (60-80), Medium (85-105), High (110-140)
+- Attack tiers: Low (15-20), Medium (21-28), High (29-35)
+- Server-side validation clamps all values to safe ranges
 
-### Risks
-- Gemini occasionally returns malformed JSON even with schema → add try/catch + retry once
-- Imagen can take 5-10s → show Gemini results (name, stats) immediately, load portrait async
-- Phone photo quality varies → Gemini handles this well, it's multimodal
+## Special Ability Mechanics
+
+| Mechanic | Effect | Trigger |
+|----------|--------|---------|
+| `drain` | Heal attacker by `value` HP | 30% per attack |
+| `shield` | Reduce incoming damage by `value` for 3 turns | 30% per attack |
+| `burn` | Deal `value` damage per turn for 3 turns | 30% per attack |
+| `freeze` | Skip enemy's next turn | 30% per attack |
+| `boost` | Increase next attack damage by `value` | 30% per attack |
+
+## Tech Stack
+
+- **Frontend**: Vanilla JS, Three.js v0.160.0, MindAR v1.2.5
+- **Backend**: Python 3 HTTPS server (`serve.py`)
+- **APIs**: Gemini 2.5 Flash (vision + stat gen), Imagen 4.0 Fast (portrait gen)
+- **AR Targets**: MindAR band-example images (raccoon + bear)
+
+## Proxy Server (`serve.py`)
+
+- `POST /api/gemini` — image + conceptual stats → balanced monster JSON
+- `POST /api/imagen` — description + type → portrait base64
+- `POST /log` — remote console log relay from phone
+- HTTPS on port 8443 with self-signed certs
 
 ---
 
-## Priority 2: Lyria RealTime (timeboxed 1hr)
+## Stretch Goals
 
-### Notes
-- WebSocket: `wss://generativelanguage.googleapis.com/ws/...v1alpha...BidiGenerateMusic`
-- Auth unclear for browser WebSocket — may need proxy to establish connection
-- Audio: raw PCM 48kHz stereo → Web Audio API AudioWorklet for playback
-- State-driven prompts: swap weighted prompts at game state transitions
-- 10 min session cap — fine for demo
-- FALLBACK: royalty-free battle loop if this fights us
-
----
-
-## Priority 3: Gemini TTS Announcer (stretch)
-
-### Notes
-- Pre-generate key phrases during load: "FIGHT!", "Victory!", "Defeat!", skill names
-- Cache as audio blobs, play instantly during combat
-- Uses Gemini API with `response_modalities: ["AUDIO"]`
-- Could narrate monster descriptions during summoning phase
+- Lyria RealTime adaptive music via WebSocket
+- Gemini TTS announcer for combat narration
+- GLB 3D models instead of portrait planes
+- Environment cards (forest, weather effects)

@@ -39,20 +39,56 @@ finally:
 GEMINI_MODEL = "gemini-2.5-flash"
 IMAGEN_MODEL = "imagen-4.0-fast-generate-001"
 
-MONSTER_PROMPT = """Analyze this image and create a fantasy battle monster inspired by what you see.
+MONSTER_PROMPT_TEMPLATE = """Analyze this image and create a fantasy battle monster inspired by what you see.
 Be creative — the monster should visually reference the object/scene in the image.
+
+The player has chosen these conceptual stats:
+- Health: {health_tier} (Low = 60-80 HP, Medium = 85-105 HP, High = 110-140 HP)
+- Attack: {attack_tier} (Low = base 15-20, Medium = 21-28, High = 29-35)
+- Special Ability: "{special_ability}"
+
+BALANCING RULES — you are the AI Game Master:
+- Total stat budget is ~200 points. HP + (attack * 4) + (special_value * 2) should be close to 200.
+- If the player picks High HP AND High Attack, reduce one slightly to stay balanced.
+- Map the special ability text into one of these mechanics: drain (steal HP), shield (reduce incoming damage), burn (damage over time), freeze (skip enemy turn once), boost (increase next attack damage).
+- Determine a numeric value for the special ability (5-25 range).
+- Skill damages should be proportional to the attack stat.
+
 Return JSON with this exact schema:
-{
+{{
   "name": string (2-3 word creative monster name),
   "type": string (one of: fire, ice, lightning, shadow, nature),
-  "description": string (one sentence visual description for generating art — describe the monster's appearance, NOT the original image),
+  "description": string (one sentence visual description of the monster for generating art — describe the monster's appearance, NOT the original image),
+  "hp": number (balanced HP based on health tier and budget),
+  "attack": number (base attack value based on attack tier),
+  "specialAbility": {{
+    "name": string (the player's special ability name, refined if needed),
+    "description": string (one sentence explaining what it does in battle),
+    "mechanic": string (one of: drain, shield, burn, freeze, boost),
+    "value": number (the numeric parameter, 5-25)
+  }},
   "skills": [
-    {"name": string (creative skill name), "color": string (hex color like #ff4400), "description": string (short flavor text)},
-    {"name": string, "color": string, "description": string},
-    {"name": string (this is the ultimate attack — make it epic), "color": string, "description": string}
+    {{"name": string (creative skill name), "damage": number (15-30), "color": string (hex color like #ff4400), "description": string (short flavor text)}},
+    {{"name": string, "damage": number (20-35), "color": string, "description": string}},
+    {{"name": string (this is the ultimate attack — make it epic), "damage": number (45-75), "color": string, "description": string}}
   ]
-}
-Exactly 3 skills. No damage or HP values — just names, colors, descriptions."""
+}}
+Exactly 3 skills. The ultimate (3rd skill) should deal roughly 2-3x the first skill's damage."""
+
+
+def validate_monster(monster):
+    """Clamp stats to sane ranges in case Gemini goes wild."""
+    monster["hp"] = max(60, min(140, monster.get("hp", 100)))
+    monster["attack"] = max(15, min(35, monster.get("attack", 25)))
+    for sk in monster.get("skills", []):
+        sk["damage"] = max(10, min(80, sk.get("damage", 25)))
+    sa = monster.get("specialAbility", {})
+    sa["value"] = max(5, min(25, sa.get("value", 10)))
+    valid_mechanics = {"drain", "shield", "burn", "freeze", "boost"}
+    if sa.get("mechanic") not in valid_mechanics:
+        sa["mechanic"] = "boost"
+    monster["specialAbility"] = sa
+    return monster
 
 
 def gemini_proxy(body):
@@ -60,11 +96,20 @@ def gemini_proxy(body):
     data = json.loads(body)
     image_b64 = data.get("image", "")
     mime = data.get("mime", "image/jpeg")
+    health_tier = data.get("health", "Medium")
+    attack_tier = data.get("attack", "Medium")
+    special = data.get("specialAbility", "Fireball")
+
+    prompt = MONSTER_PROMPT_TEMPLATE.format(
+        health_tier=health_tier,
+        attack_tier=attack_tier,
+        special_ability=special,
+    )
 
     payload = {
         "contents": [{"parts": [
             {"inlineData": {"mimeType": mime, "data": image_b64}},
-            {"text": MONSTER_PROMPT},
+            {"text": prompt},
         ]}],
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -80,6 +125,7 @@ def gemini_proxy(body):
     # Clean potential trailing commas
     text = text.replace(",\n}", "\n}").replace(",\n]", "\n]")
     monster = json.loads(text)
+    monster = validate_monster(monster)
     return monster
 
 
@@ -191,6 +237,8 @@ server.socket = ctx.wrap_socket(server.socket, server_side=True)
 print(f"\n  Awakards running at:")
 print(f"    Local:    https://localhost:{PORT}")
 print(f"    Phone:    https://{local_ip}:{PORT}")
+print(f"    Create:   https://{local_ip}:{PORT}/create.html")
+print(f"    Battle:   https://{local_ip}:{PORT}/battle.html")
 print(f"    Test:     https://{local_ip}:{PORT}/test.html")
 print(f"    Logs:     {LOG_FILE}")
 print(f"    API key:  {'SET' if API_KEY else 'MISSING'}")
