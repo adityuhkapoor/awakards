@@ -1,167 +1,140 @@
-# Awakards — Product Requirements Document (MVP)
+# Awakards — Product Requirements Document (MVP v2)
 
 ## 1. Product Vision
 
-Awakards is an augmented reality (AR) tabletop card battle game where players design their own monsters from scratch and battle them in the real world. Players draw a creature on paper, assign it conceptual stats, and use AI to transform the rough sketch into polished card art while an AI "Game Master" balances the mechanics into hard numbers. Using AR technology, these custom digital cards are projected over physical tokens on a table, creating a social, user-generated hybrid of Pokemon and Yu-Gi-Oh! where imagination is the only limit.
+Awakards MVP is a browser-based AR card combat demo that proves one core technical claim:
+two physical cards can be tracked simultaneously on a phone camera feed while card-to-card combat effects resolve reliably in real time.
 
-The primary objective of the MVP is to demonstrate real-time, zero-friction integration of Generative AI (image + text) into a live game environment.
+The MVP is optimized for a 3-minute hackathon demo and judged primarily on live reliability and visual clarity.
 
-## 2. Target Audience
+## 2. Success Criteria
 
-- **Primary**: Hackathon judges, demo-day attendees, portfolio reviewers
-- **Secondary**: Friends playing together at a table — the "Stranger Things making up a game together" vibe
+- Dual-card tracking works handheld on iPhone in real table conditions.
+- Combat sequence runs end-to-end: `P1 skill -> P2 skill -> P1 ultimate -> game over`.
+- If Gemini is slow or unavailable, combat still resolves locally.
+- Demo completes in under 30 seconds of combat after card placement.
 
-## 3. Core Systems
+## 3. Scope (MVP)
 
-### System 1: The Generation Engine (Card Creation)
+### In Scope
 
-Turns a player's physical sketch + conceptual stats into a complete digital card.
+- MindAR image-target tracking with one `.mind` file.
+- Two monster cards tracked simultaneously (`maxTrack: 2`).
+- Monsters rendered as anchored visuals (cubes first, models optional).
+- Scene-level projectile VFX traveling from cached attacker position to cached defender position.
+- Local turn state machine, HP updates, KO/victory overlay.
+- Skill buttons for Basic/Special/Ultimate with deterministic damage values.
+- Optional Gemini narration/referee output as non-blocking enhancement.
 
-**Flow:**
-1. Player draws a monster on paper (e.g., "red cyclops with an ice eye")
-2. Player snaps a photo of the drawing via the companion app
-3. Player selects conceptual stats via UI dropdowns (not voice):
-   - **Health**: Low / Medium / High
-   - **Attack**: Low / Medium / High
-   - **Special Ability**: Free-text name (e.g., "Drain", "Ice Beam", "Shadow Step")
-4. App fires **two parallel API calls**:
-   - **Image Generation API** — transforms the sketch into polished, anime-inspired trading card art
-   - **Stat Balancing LLM** — translates conceptual stats into balanced numerical values using a point-budget system
-5. Both results are merged into a single card profile (JSON) keyed by a unique UUID
-6. A masking animation ("Forging Card...") plays for ~5-8 seconds to hide API latency
+### Out of Scope
 
-### System 2: The AR Engine (Card Projection)
+- Hand-drawn sketch-to-card generation as required flow.
+- ArUco/fiducial marker pipeline and marker-ID backend mapping.
+- Persistent backend card database and UUID profile retrieval.
+- Multiplayer networking across devices.
+- Full deck-building systems, economy, accounts, or progression.
 
-Maps digital card profiles to physical markers and renders them in AR.
+## 4. Source of Truth
 
-**Flow:**
-1. Physical blank cards have pre-printed fiducial markers (ArUco markers or similar)
-2. Each marker ID is mapped to a card UUID in the backend
-3. Phone camera (mounted on tripod, looking down at table) continuously scans for markers
-4. When a marker is detected, the system retrieves the card profile by UUID and overlays:
-   - The polished 2D card art
-   - Floating HP bar and stat display
-5. The overlay tracks the physical card's position — move the card, the digital monster moves with it
+Implementation decisions are locked for MVP:
 
-### System 3: Combat State Machine
+- AR stack: `MindAR v1.2.5 + Three.js` (importmap, no build step).
+- Tracking method: image targets from compiled `.mind` file.
+- Runtime model: single web page running on phone browser.
+- Combat authority: local deterministic resolver.
+- Gemini role: additive, non-blocking.
 
-Simple turn-based battle logic running locally on one device.
+If documentation conflicts with these items, this section wins.
 
-**Flow:**
-1. Both players have created and placed their cards on the table
-2. AR displays both monsters with floating HP bars
-3. Players take turns tapping an "Attack" button on screen
-4. Each turn: calculate damage, apply special ability, update HP bars, check win condition
-5. Game ends when one monster's HP reaches zero
+## 5. Core System Architecture
 
-## 4. Card Data Model
+1. Camera Feed -> MindAR Tracker.
+2. MindAR emits `targetFound/targetLost` pose updates.
+3. Anchor manager tracks monster anchors and debounced dual-target readiness.
+4. Game state machine controls turns, HP, win conditions.
+5. FX system executes projectiles and hit/KO effects between cached positions.
+6. UI overlay shows turn, skills, HP, prompts.
+7. Optional Gemini call returns commentary/structured flavor; never blocks turn resolution.
 
-```json
-{
-  "id": "card_8472",
-  "name": "Red Cyclops",
-  "image_url": "https://...",
-  "original_sketch_url": "https://...",
-  "stats": {
-    "hp": 20,
-    "attack": 50,
-    "special": {
-      "name": "Ice Eye",
-      "description": "Freezes opponent, skipping their next turn. 30% chance to trigger.",
-      "effect_type": "status"
-    }
-  },
-  "marker_id": "aruco_17",
-  "created_at": "2026-02-28T12:00:00Z"
-}
-```
+## 6. Mandatory Spike Gates (Do First)
 
-## 5. Stat Balancing Rules
+### Spike 1: Version Compatibility
 
-Every card gets a **base budget of 100 points** to distribute across stats. The AI Game Master must follow these constraints:
+- Goal: 1 target, 1 cube, no console errors.
+- Pass: cube appears on target with selected library versions.
+- Fail action: pin Three.js to a known-compatible version and retest.
 
-| Player Input | Point Allocation | Example Value |
-|---|---|---|
-| Low | ~20% of budget | 20 |
-| Medium | ~35% of budget | 35 |
-| High | ~50% of budget | 50 |
+### Spike 2: Dual-Target Tracking
 
-- Health + Attack + Special Power cost must sum to ~100
-- Special abilities with high impact (e.g., skip turn, drain) consume more of the budget
-- The AI must return structured JSON, never conversational text
+- Goal: 2 targets, 2 cubes concurrently.
+- Pass: both anchors stable together in one frame.
+- Fail action: adjust targets/spacing and tracking parameters.
 
-## 6. User Flow (Demo Script)
+### Spike 3: Handheld Stability
 
-### Phase 1 — The Canvas
-Player grabs pen and paper, draws their monster.
+- Goal: run on real phone over a real table.
+- Pass: acceptable jitter/flicker with brief occlusions.
+- Fail action: tune `filterBeta`, `missTolerance`, `warmupTolerance`.
 
-### Phase 2 — Digitization
-Player places sketch under camera, taps "Capture." Selects stats via dropdown. Taps "Forge Monster."
+### Spike 4: Combat Path
 
-### Phase 3 — The Masked Sprint
-App shows a flashy processing animation. Behind the scenes, image generation and stat balancing run in parallel. Results merge into one card profile.
+- Goal: projectile A->B from cached world positions.
+- Pass: clear, repeatable card-to-card effect.
+- Fail action: rework position caching and effect timing.
 
-### Phase 4 — The Anchor
-App signals the card is ready. Player places a physical blank card (with fiducial marker) on the table. AR engine detects the marker, pulls the card profile, and renders the monster hovering over the card.
+## 7. Demo Flow (Judge-Facing)
 
-### Phase 5 — The Showdown
-Player 2 repeats Phases 1-4. Two monsters are now on the table. Players take turns attacking. Floating HP bars update. Game ends when one monster falls.
+1. Place two monster cards on table.
+2. Both anchors lock; prompt changes to `Fight`.
+3. P1 uses Skill 1.
+4. P2 auto-responds after short delay.
+5. P1 uses Ultimate; KO and victory overlay.
 
-## 7. Technical Architecture
+Target runtime for this sequence: 20-30 seconds.
 
-```
-[Phone Camera] --> [Capture Sketch]
-                        |
-                   [Generate UUID]
-                        |
-               +--------+--------+
-               |                 |
-     [Image Gen API]    [Stat Balance LLM]
-               |                 |
-               +--------+--------+
-                        |
-                [Merged Card JSON]
-                        |
-                  [Card Database]
-                        |
-            [AR Marker Detection]
-                        |
-              [Render Card in AR]
-                        |
-              [Combat State Machine]
-```
+## 8. Gameplay Rules (MVP)
 
-**Key architectural decisions:**
-- **Parallel API calls**: Image and stat generation fire simultaneously, never sequentially
-- **Latency masking**: Processing animations buy 5-8 seconds for API turnaround
-- **Centralized state**: All data keyed by UUID — single source of truth
-- **Local combat**: No networking; all battle logic runs on one device
-- **Tripod mount**: Phone points down at table, freeing players' hands
+- Initial HP: fixed and scripted for demo pacing.
+- Skill tiers:
+  - Basic: moderate damage.
+  - Special: lower/variant damage with distinct VFX.
+  - Ultimate: high damage, intended finishing move.
+- Turn order: P1 -> P2 -> P1 scripted win.
+- No randomness required for MVP.
 
-## 8. MVP Feature Checklist
+## 9. Gemini Integration (MVP-safe)
 
-- [ ] Photo capture of hand-drawn sketch
-- [ ] Stat selection UI (Health, Attack, Special dropdowns)
-- [ ] Image generation API integration (sketch -> polished card art)
-- [ ] Stat balancing LLM integration (conceptual stats -> balanced numbers)
-- [ ] Card profile storage (UUID-keyed JSON)
-- [ ] Fiducial marker detection (ArUco or similar)
-- [ ] AR overlay rendering (2D sprite + floating HP bar)
-- [ ] Turn-based combat loop (attack, damage calc, special ability, HP update, win check)
-- [ ] Processing animation to mask API latency
+Gemini is used in a way that is visible but non-critical to demo reliability.
 
-## 9. Out of Scope (Do Not Build for MVP)
+- Recommended: short combat narration line per turn.
+- Optional: structured referee JSON for flavor metadata.
+- Hard requirement: local fallback path if Gemini call fails or times out.
+- Constraint: no Gemini dependency in tracking, animation timing, or damage application.
 
-- Voice recognition / speech-to-text commands
-- Full 3D monster models (use 2D sprites in 3D space)
-- Complex deck-building or multi-card synergies
-- Multiplayer networking (single device only)
-- Environment cards (forest, weather, etc.) — cool idea, defer to v2
-- User accounts or persistent card libraries
+## 10. Risks and Mitigations
 
-## 10. Open Questions
+- Dual-target instability.
+  - Mitigation: spike gating first; no feature work before pass.
+- Performance drop on phone.
+  - Mitigation: simple geometry/materials first; profile before polish.
+- State flicker from intermittent tracking.
+  - Mitigation: debounce readiness/loss windows.
+- Network/API instability.
+  - Mitigation: all combat local; Gemini is optional overlay.
 
-1. **AR SDK choice**: Unity + Vuforia, AR Foundation, or a web-based AR solution (AR.js / MindAR)?
-2. **Image generation provider**: Which API for sketch-to-art? (Gemini/Nano Banana 2, DALL-E, Stable Diffusion)
-3. **Hosting**: Local-only for demo, or deploy a lightweight backend?
-4. **Physical cards**: How many pre-printed marker cards do we need for the demo? (Minimum: 2)
+## 11. Acceptance Checklist
+
+- [ ] Spike 1 passed.
+- [ ] Spike 2 passed.
+- [ ] Spike 3 passed.
+- [ ] Spike 4 passed.
+- [ ] Full scripted combat loop works start-to-finish.
+- [ ] Demo can run without Gemini responses.
+- [ ] One fallback mode documented (single tracked card + fixed enemy offset).
+
+## 12. Post-MVP Stretch
+
+- Replace cubes with curated GLB monsters.
+- Better particles, hit reactions, and sound.
+- Ability card tracking for physical move selection.
+- Optional generation pipeline (photo -> monster metadata/art) as pre-battle bonus flow.
