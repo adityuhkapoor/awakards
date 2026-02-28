@@ -32,11 +32,18 @@
 import { Compiler } from 'https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js';
 
 const CARDS = [
-  { label: 'P1 MONSTER',     bg: '#f0f0e8', fg: '#1a6b1a', accent: '#0d4d0d', shape: 'diamond',  seed: 1 },
-  { label: 'P2 MONSTER',     bg: '#e8e8f0', fg: '#1a1a8b', accent: '#0d0d6b', shape: 'hexagon',  seed: 2 },
-  { label: 'BASIC ATTACK',   bg: '#f0ece0', fg: '#994400', accent: '#6b2e00', shape: 'triangle', seed: 3 },
-  { label: 'SPECIAL ATTACK', bg: '#e0ecf0', fg: '#006688', accent: '#004466', shape: 'star',     seed: 4 },
-  { label: 'ULTIMATE',       bg: '#f0e0ea', fg: '#8b1a55', accent: '#6b0d3d', shape: 'burst',    seed: 5 },
+  // Each card has digital + photo variant for redundant tracking
+  // Target order: 0=P1(dig), 1=P1(photo), 2=P2(dig), 3=P2(photo), 4=Basic(dig), 5=Basic(photo), 6=Special(dig), 7=Special(photo), 8=Ult(dig), 9=Ult(photo)
+  { label: 'P1 MONSTER',         bg: '#f0f0e8', fg: '#1a6b1a', accent: '#0d4d0d', shape: 'diamond',  seed: 1 },
+  { label: 'P1 MONSTER (PHOTO)', bg: '#f0f0e8', fg: '#1a6b1a', accent: '#0d4d0d', shape: 'diamond',  seed: 1, photoOverride: 'targets/p1-monster-photo.png' },
+  { label: 'P2 MONSTER',         bg: '#e8e8f0', fg: '#1a1a8b', accent: '#0d0d6b', shape: 'hexagon',  seed: 2 },
+  { label: 'P2 MONSTER (PHOTO)', bg: '#e8e8f0', fg: '#1a1a8b', accent: '#0d0d6b', shape: 'hexagon',  seed: 2, photoOverride: 'targets/p2-monster-photo.png' },
+  { label: 'BASIC ATTACK',         bg: '#f0ece0', fg: '#994400', accent: '#6b2e00', shape: 'triangle', seed: 3 },
+  { label: 'BASIC ATTACK (PHOTO)', bg: '#f0ece0', fg: '#994400', accent: '#6b2e00', shape: 'triangle', seed: 3, photoOverride: 'targets/basic-attack-photo.png' },
+  { label: 'SPECIAL ATTACK',         bg: '#e0ecf0', fg: '#006688', accent: '#004466', shape: 'star',     seed: 4 },
+  { label: 'SPECIAL ATTACK (PHOTO)', bg: '#e0ecf0', fg: '#006688', accent: '#004466', shape: 'star',     seed: 4, photoOverride: 'targets/special-attack-photo.png' },
+  { label: 'ULTIMATE',         bg: '#f0e0ea', fg: '#8b1a55', accent: '#6b0d3d', shape: 'burst',    seed: 5 },
+  { label: 'ULTIMATE (PHOTO)', bg: '#f0e0ea', fg: '#8b1a55', accent: '#6b0d3d', shape: 'burst',    seed: 5, photoOverride: 'targets/ultimate-attack-photo.png' },
 ];
 
 const W = 1000, H = 1400;
@@ -291,16 +298,36 @@ document.getElementById('compile-btn').addEventListener('click', async () => {
   logEl.textContent = '';
 
   log('Generating 5 feature-dense card images (1000x1400)...');
-  const canvases = CARDS.map((card, i) => {
-    const c = drawCard(card);
+  const canvases = [];
+  for (let i = 0; i < CARDS.length; i++) {
+    const card = CARDS[i];
+    let c;
+    if (card.photoOverride) {
+      log(`  [${i}] ${card.label} — loading photo override: ${card.photoOverride}`);
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => { log(`    WARN: photo load failed, falling back to generated`); resolve(null); };
+        el.src = card.photoOverride;
+      });
+      if (img) {
+        c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        c.getContext('2d').drawImage(img, 0, 0, W, H);
+      } else {
+        c = drawCard(card);
+      }
+    } else {
+      c = drawCard(card);
+    }
     const preview = document.createElement('canvas');
     preview.width = 150; preview.height = 210;
     preview.title = `Target ${i}: ${card.label}`;
     preview.getContext('2d').drawImage(c, 0, 0, 150, 210);
     document.getElementById('previews').appendChild(preview);
-    log(`  [${i}] ${card.label} — ${W}x${H}`);
-    return c;
-  });
+    log(`  [${i}] ${card.label} — ${W}x${H}${card.photoOverride ? ' (PHOTO)' : ''}`);
+    canvases.push(c);
+  }
 
   log('\nConverting to ImageBitmap...');
   const images = [];

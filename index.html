@@ -432,9 +432,9 @@ playAgainBtn.addEventListener('click', () => {
     // AR mode — re-attach to MindAR anchors, wait for tracking
     statusEl.textContent = 'Point camera at both cards';
     demoBtn.style.display = 'block';
-    a0.group.add(p1CardGroup);
+    p1ActiveAnchor.group.add(p1CardGroup);
     p1CardGroup.position.set(0, 0.1, 0);
-    a1.group.add(p2CardGroup);
+    p2ActiveAnchor.group.add(p2CardGroup);
     p2CardGroup.position.set(0, 0.1, 0);
     console.log('[GAME] Reset — waiting for cards');
   }
@@ -446,11 +446,11 @@ playAgainBtn.addEventListener('click', () => {
 const mindar = new MindARThree({
   container: $('#container'),
   imageTargetSrc: 'targets/targets.mind',
-  maxTrack: 3,
+  maxTrack: 4,
   filterMinCF: 0.0001,
   filterBeta: 0.001,
-  missTolerance: 3,
-  warmupTolerance: 1,
+  missTolerance: 5,
+  warmupTolerance: 0,
 });
 
 const { renderer, scene, camera } = mindar;
@@ -782,16 +782,30 @@ let p1Animator = null, p2Animator = null;
 /* ==========================================================
    ANCHORS + TRACKING
    ========================================================== */
-const a0 = mindar.addAnchor(0);  // P1 monster
-const a1 = mindar.addAnchor(1);  // P2 monster
-const aBasic   = mindar.addAnchor(2);  // Basic attack
-const aSpecial = mindar.addAnchor(3);  // Special attack
-const aUlt     = mindar.addAnchor(4);  // Ultimate attack
+// Dual targets per card: digital (even) + photo (odd)
+// 0=P1(dig), 1=P1(photo), 2=P2(dig), 3=P2(photo), 4=Basic(dig), 5=Basic(photo), 6=Special(dig), 7=Special(photo), 8=Ult(dig), 9=Ult(photo)
+const a0     = mindar.addAnchor(0);  // P1 monster (digital)
+const a0p    = mindar.addAnchor(1);  // P1 monster (photo)
+const a1     = mindar.addAnchor(2);  // P2 monster (digital)
+const a1p    = mindar.addAnchor(3);  // P2 monster (photo)
+const aBasic     = mindar.addAnchor(4);  // Basic attack (digital)
+const aBasicP    = mindar.addAnchor(5);  // Basic attack (photo)
+const aSpecial   = mindar.addAnchor(6);  // Special attack (digital)
+const aSpecialP  = mindar.addAnchor(7);  // Special attack (photo)
+const aUlt       = mindar.addAnchor(8);  // Ultimate (digital)
+const aUltP      = mindar.addAnchor(9);  // Ultimate (photo)
 
-a0.onTargetFound = () => { p1Tracked = true;  console.log('[TRACK] P1 Monster FOUND'); onTrack(); };
-a0.onTargetLost  = () => { if (!cardsLocked) { p1Tracked = false; console.log('[TRACK] P1 Monster LOST'); onTrack(); } };
-a1.onTargetFound = () => { p2Tracked = true;  console.log('[TRACK] P2 Monster FOUND'); onTrack(); };
-a1.onTargetLost  = () => { if (!cardsLocked) { p2Tracked = false; console.log('[TRACK] P2 Monster LOST'); onTrack(); } };
+// Track which anchor variant is active for position caching
+let p1ActiveAnchor = a0, p2ActiveAnchor = a1;
+
+a0.onTargetFound  = () => { p1Tracked = true;  p1ActiveAnchor = a0;  console.log('[TRACK] P1 Monster FOUND (digital)'); onTrack(); };
+a0.onTargetLost   = () => { if (!cardsLocked) { p1Tracked = false; console.log('[TRACK] P1 Monster LOST (digital)'); onTrack(); } };
+a0p.onTargetFound = () => { p1Tracked = true;  p1ActiveAnchor = a0p; console.log('[TRACK] P1 Monster FOUND (photo)'); onTrack(); };
+a0p.onTargetLost  = () => { if (!cardsLocked) { p1Tracked = false; console.log('[TRACK] P1 Monster LOST (photo)'); onTrack(); } };
+a1.onTargetFound  = () => { p2Tracked = true;  p2ActiveAnchor = a1;  console.log('[TRACK] P2 Monster FOUND (digital)'); onTrack(); };
+a1.onTargetLost   = () => { if (!cardsLocked) { p2Tracked = false; console.log('[TRACK] P2 Monster LOST (digital)'); onTrack(); } };
+a1p.onTargetFound = () => { p2Tracked = true;  p2ActiveAnchor = a1p; console.log('[TRACK] P2 Monster FOUND (photo)'); onTrack(); };
+a1p.onTargetLost  = () => { if (!cardsLocked) { p2Tracked = false; console.log('[TRACK] P2 Monster LOST (photo)'); onTrack(); } };
 
 function onTrack() {
   if (demoMode) return;
@@ -807,10 +821,10 @@ function onTrack() {
 }
 
 function cachePositions() {
-  a0.group.getWorldPosition(cachedPos.p1);
-  a1.group.getWorldPosition(cachedPos.p2);
-  a0.group.getWorldQuaternion(cachedQuat.p1);
-  a1.group.getWorldQuaternion(cachedQuat.p2);
+  p1ActiveAnchor.group.getWorldPosition(cachedPos.p1);
+  p2ActiveAnchor.group.getWorldPosition(cachedPos.p2);
+  p1ActiveAnchor.group.getWorldQuaternion(cachedQuat.p1);
+  p2ActiveAnchor.group.getWorldQuaternion(cachedQuat.p2);
 }
 
 async function lockCards() {
@@ -818,8 +832,8 @@ async function lockCards() {
   cachePositions();
 
   // Detach card groups from MindAR anchors and place in scene at cached world transforms
-  a0.group.remove(p1CardGroup);
-  a1.group.remove(p2CardGroup);
+  p1ActiveAnchor.group.remove(p1CardGroup);
+  p2ActiveAnchor.group.remove(p2CardGroup);
 
   p1CardGroup.position.copy(cachedPos.p1);
   p1CardGroup.position.y += 0.1;
@@ -871,7 +885,8 @@ async function initCardGroups() {
    ABILITY CARD DETECTION + RADIAL TIMER
    ========================================================== */
 // Maps physical card target index → skill slot (0=basic, 1=special, 2=ultimate)
-const ABILITY_SLOT = { 2: 0, 3: 1, 4: 2 };
+// Both digital and photo variants map to same slot
+const ABILITY_SLOT = { 4: 0, 5: 0, 6: 1, 7: 1, 8: 2, 9: 2 };
 const ABILITY_TIERS = ['basic', 'special', 'ultimate'];
 const CONFIRM_TIME = 2000;
 let currentPlayer = 1;
@@ -909,12 +924,18 @@ function onAbilityLost(targetIndex) {
   timerEl.style.display = 'none';
 }
 
-aBasic.onTargetFound   = () => onAbilityFound(2);
-aBasic.onTargetLost    = () => onAbilityLost(2);
-aSpecial.onTargetFound = () => onAbilityFound(3);
-aSpecial.onTargetLost  = () => onAbilityLost(3);
-aUlt.onTargetFound     = () => onAbilityFound(4);
-aUlt.onTargetLost      = () => onAbilityLost(4);
+aBasic.onTargetFound    = () => onAbilityFound(4);
+aBasic.onTargetLost     = () => onAbilityLost(4);
+aBasicP.onTargetFound   = () => onAbilityFound(5);
+aBasicP.onTargetLost    = () => onAbilityLost(5);
+aSpecial.onTargetFound  = () => onAbilityFound(6);
+aSpecial.onTargetLost   = () => onAbilityLost(6);
+aSpecialP.onTargetFound = () => onAbilityFound(7);
+aSpecialP.onTargetLost  = () => onAbilityLost(7);
+aUlt.onTargetFound      = () => onAbilityFound(8);
+aUlt.onTargetLost       = () => onAbilityLost(8);
+aUltP.onTargetFound     = () => onAbilityFound(9);
+aUltP.onTargetLost      = () => onAbilityLost(9);
 
 function tickAbilityTimer(now) {
   if (!abilityDetected || abilityConfirmed || busy || over) return;
