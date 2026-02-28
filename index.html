@@ -741,36 +741,10 @@ class SpriteAnimator {
 
     const ud = this.cardGroup.userData;
     const ctx = ud.cardCanvas.getContext('2d');
-    // Portrait area: x=24, y=24, w=464, h=340
-    const portX = 24, portY = 24, portW = 464, portH = 340;
-    // Clear portrait area and redraw portrait
-    ctx.save();
-    ctx.beginPath(); ctx.roundRect(portX, portY, portW, portH, 12); ctx.clip();
-    // Redraw original portrait
-    if (ud.portraitImg) {
-      const imgAspect = ud.portraitImg.width / ud.portraitImg.height;
-      const boxAspect = portW / portH;
-      let sx = 0, sy = 0, sw = ud.portraitImg.width, sh = ud.portraitImg.height;
-      if (imgAspect > boxAspect) { sw = ud.portraitImg.height * boxAspect; sx = (ud.portraitImg.width - sw) / 2; }
-      else { sh = ud.portraitImg.width / boxAspect; sy = (ud.portraitImg.height - sh) / 2; }
-      ctx.drawImage(ud.portraitImg, sx, sy, sw, sh, portX, portY, portW, portH);
-    } else {
-      ctx.fillStyle = '#111';
-      ctx.fillRect(portX, portY, portW, portH);
-    }
-    // Draw sprite frame on top (centered in portrait area, using "lighter" composite for black-bg transparency)
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.drawImage(img, portX, portY, portW, portH);
-    ctx.globalCompositeOperation = 'source-over';
-    // Re-apply vignette fade at bottom
-    const vig = ctx.createLinearGradient(0, portY + portH - 80, 0, portY + portH);
-    vig.addColorStop(0, 'rgba(17,17,17,0)');
-    vig.addColorStop(1, 'rgba(17,17,17,1)');
-    ctx.fillStyle = vig;
-    ctx.fillRect(portX, portY + portH - 80, portW, 80);
-    ctx.restore();
-
+    // Just stamp the sprite over the portrait area — simplest possible draw
+    ctx.drawImage(img, 24, 24, 464, 340);
     ud.cardTex.needsUpdate = true;
+    console.log('[SPRITE-DRAW] drew frame', this.current, this.frame);
   }
 }
 
