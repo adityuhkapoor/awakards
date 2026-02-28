@@ -416,7 +416,6 @@ playAgainBtn.addEventListener('click', () => {
     cg.scale.set(1, 1, 1);
     cg.userData.cardMat.opacity = 1;
     cg.userData.glowMat.opacity = 0.6;
-    cg.userData.spriteMat.opacity = 1;
     cg.userData.alive = true;
     updateCardHP(cg, MAX_HP);
   });
@@ -654,25 +653,10 @@ function makeCardGroup(monsterData, portraitImg) {
   const cardPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.9), cardMat);
   group.add(cardPlane);
 
-  // Sprite overlay (positioned over portrait area of card)
-  // Portrait region: y=24..364 on 768h canvas → normalized: top=0.953, bottom=0.526
-  // Card plane is 0.6 x 0.9. Portrait occupies ~44% of card height, top portion.
-  const spriteH = 0.9 * (340 / 768);  // ~0.399
-  const spriteW = 0.6 * (464 / 512);  // ~0.544
-  const spriteMat = new THREE.MeshBasicMaterial({
-    transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending, // black bg becomes invisible
-  });
-  const spritePlane = new THREE.Mesh(new THREE.PlaneGeometry(spriteW, spriteH), spriteMat);
-  spritePlane.renderOrder = 10; // force render after card plane
-  spritePlane.position.y = 0.222;
-  spritePlane.position.z = 0.01; // in front of card
-  group.add(spritePlane);
-
   group.userData = {
     alive: true,
     cardCanvas, cardTex, cardMat, cardPlane,
-    glowPlane, glowMat, spritePlane, spriteMat,
+    glowPlane, glowMat,
     monsterData, portraitImg,
   };
 
@@ -686,15 +670,19 @@ function updateCardHP(cardGroup, currentHP) {
   ud.cardCanvas = newCanvas;
   ud.cardTex.image = newCanvas;
   ud.cardTex.needsUpdate = true;
+  // Force sprite animator to redraw on the new canvas
+  const anim = cardGroup === p1CardGroup ? p1Animator : p2Animator;
+  if (anim) { anim.lastDrawn = -1; anim._draw(); }
 }
 
 /* ==========================================================
    SPRITE ANIMATOR
    ========================================================== */
 class SpriteAnimator {
-  constructor(material, sequences, fps = 10) {
-    this.mat = material;           // MeshBasicMaterial with .map
-    this.sequences = sequences;    // { idle: [tex,...], cast: [...], hit: [...] }
+  // Draws sprite frames directly onto the card canvas — no separate plane needed
+  constructor(cardGroup, sequences, fps = 8) {
+    this.cardGroup = cardGroup;
+    this.sequences = sequences;    // { idle: [Image,...], cast: [...], hit: [...] }
     this.fps = fps;
     this.current = 'idle';
     this.frame = 0;
@@ -702,10 +690,9 @@ class SpriteAnimator {
     this.loop = true;
     this.onComplete = null;
     this.playing = true;
-    if (sequences.idle?.length) {
-      this.mat.map = sequences.idle[0];
-      this.mat.needsUpdate = true;
-    }
+    this.lastDrawn = -1;
+    // Draw first frame immediately
+    this._draw();
   }
 
   play(name, { loop = true, onComplete = null } = {}) {
@@ -716,8 +703,8 @@ class SpriteAnimator {
     this.loop = loop;
     this.onComplete = onComplete;
     this.playing = true;
-    this.mat.map = this.sequences[name][0];
-    this.mat.needsUpdate = true;
+    this.lastDrawn = -1;
+    this._draw();
   }
 
   tick(dt) {
@@ -738,23 +725,62 @@ class SpriteAnimator {
         this.frame = frames.length - 1;
         this.playing = false;
         if (this.onComplete) this.onComplete();
-        // Auto-return to idle
         this.play('idle');
         return;
       }
     }
-    this.mat.map = frames[this.frame];
-    this.mat.needsUpdate = true;
+    this._draw();
+  }
+
+  _draw() {
+    const frames = this.sequences[this.current];
+    if (!frames?.length) return;
+    const img = frames[this.frame];
+    if (!img || this.lastDrawn === this.frame + this.current) return;
+    this.lastDrawn = this.frame + this.current;
+
+    const ud = this.cardGroup.userData;
+    const ctx = ud.cardCanvas.getContext('2d');
+    // Portrait area: x=24, y=24, w=464, h=340
+    const portX = 24, portY = 24, portW = 464, portH = 340;
+    // Clear portrait area and redraw portrait
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(portX, portY, portW, portH, 12); ctx.clip();
+    // Redraw original portrait
+    if (ud.portraitImg) {
+      const imgAspect = ud.portraitImg.width / ud.portraitImg.height;
+      const boxAspect = portW / portH;
+      let sx = 0, sy = 0, sw = ud.portraitImg.width, sh = ud.portraitImg.height;
+      if (imgAspect > boxAspect) { sw = ud.portraitImg.height * boxAspect; sx = (ud.portraitImg.width - sw) / 2; }
+      else { sh = ud.portraitImg.width / boxAspect; sy = (ud.portraitImg.height - sh) / 2; }
+      ctx.drawImage(ud.portraitImg, sx, sy, sw, sh, portX, portY, portW, portH);
+    } else {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(portX, portY, portW, portH);
+    }
+    // Draw sprite frame on top (centered in portrait area, using "lighter" composite for black-bg transparency)
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(img, portX, portY, portW, portH);
+    ctx.globalCompositeOperation = 'source-over';
+    // Re-apply vignette fade at bottom
+    const vig = ctx.createLinearGradient(0, portY + portH - 80, 0, portY + portH);
+    vig.addColorStop(0, 'rgba(17,17,17,0)');
+    vig.addColorStop(1, 'rgba(17,17,17,1)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(portX, portY + portH - 80, portW, 80);
+    ctx.restore();
+
+    ud.cardTex.needsUpdate = true;
   }
 }
 
-function loadTexture(url) {
+function loadSpriteImage(url) {
   return new Promise(resolve => {
-    const loader = new THREE.TextureLoader();
-    loader.load(url, tex => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      resolve(tex);
-    }, undefined, () => resolve(null));
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
   });
 }
 
@@ -763,14 +789,11 @@ async function loadSpriteSequences(monsterKey) {
   const seqs = { idle: [], cast: [], hit: [] };
   const loads = [];
 
-  // idle: 4 frames
   for (let i = 0; i < 4; i++) loads.push({ seq: 'idle', url: `${base}idle_${i}.png` });
-  // cast: 2 frames
   for (let i = 0; i < 2; i++) loads.push({ seq: 'cast', url: `${base}cast_${i}.png` });
-  // hit: 2 frames
   for (let i = 0; i < 2; i++) loads.push({ seq: 'hit', url: `${base}hit_${i}.png` });
 
-  const results = await Promise.all(loads.map(l => loadTexture(l.url)));
+  const results = await Promise.all(loads.map(l => loadSpriteImage(l.url)));
   loads.forEach((l, i) => { if (results[i]) seqs[l.seq].push(results[i]); });
 
   console.log(`[SPRITE] ${monsterKey}: idle=${seqs.idle.length} cast=${seqs.cast.length} hit=${seqs.hit.length}`);
@@ -865,13 +888,13 @@ async function initCardGroups() {
   p1CardGroup = makeCardGroup(DEMO_MONSTERS.p1, p1Portrait);
   p2CardGroup = makeCardGroup(DEMO_MONSTERS.p2, p2Portrait);
 
-  // Attach sprite animators if frames loaded
+  // Attach sprite animators — draws frames directly onto card canvas
   if (p1Seqs.idle.length) {
-    p1Animator = new SpriteAnimator(p1CardGroup.userData.spriteMat, p1Seqs, 8);
+    p1Animator = new SpriteAnimator(p1CardGroup, p1Seqs, 8);
     console.log('[SPRITE] P1 animator ready');
   }
   if (p2Seqs.idle.length) {
-    p2Animator = new SpriteAnimator(p2CardGroup.userData.spriteMat, p2Seqs, 8);
+    p2Animator = new SpriteAnimator(p2CardGroup, p2Seqs, 8);
     console.log('[SPRITE] P2 animator ready');
   }
 
@@ -1368,7 +1391,6 @@ function animDeath(cardGroup) {
       cardGroup.scale.setScalar(1 - t);
       cardGroup.userData.cardMat.opacity = 1 - t;
       cardGroup.userData.glowMat.opacity = 0.6 * (1 - t);
-      cardGroup.userData.spriteMat.opacity = 1 - t;
       bits.forEach(b => {
         b.m.position.addScaledVector(b.v, 0.016);
         b.v.y -= 0.006;
@@ -1387,7 +1409,6 @@ function animEntrance(cardGroup) {
     cardGroup.scale.set(0, 0, 0);
     cardGroup.userData.cardMat.opacity = 0;
     cardGroup.userData.glowMat.opacity = 0;
-    cardGroup.userData.spriteMat.opacity = 0;
     const t0 = performance.now();
     (function tick() {
       const t = Math.min((performance.now() - t0) / 400, 1);
@@ -1397,7 +1418,6 @@ function animEntrance(cardGroup) {
       cardGroup.scale.setScalar(ease);
       cardGroup.userData.cardMat.opacity = Math.min(t * 2, 1);
       cardGroup.userData.glowMat.opacity = Math.min(t * 1.5, 0.6);
-      cardGroup.userData.spriteMat.opacity = Math.min(t * 2, 1);
       if (t >= 1) return r();
       requestAnimationFrame(tick);
     })();
