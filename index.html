@@ -660,14 +660,12 @@ function makeCardGroup(monsterData, portraitImg) {
   const spriteH = 0.9 * (340 / 768);  // ~0.399
   const spriteW = 0.6 * (464 / 512);  // ~0.544
   const spriteMat = new THREE.MeshBasicMaterial({
-    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
   });
   const spritePlane = new THREE.Mesh(new THREE.PlaneGeometry(spriteW, spriteH), spriteMat);
-  // Center of portrait in card coords: y offset from card center
-  // Card center is 0. Portrait center at (24+170)/768 = 0.253 from top → 0.494 from center (in normalized)
-  // In world: 0.9 * (0.5 - 0.253) = 0.222
+  spritePlane.renderOrder = 10; // force render after card plane
   spritePlane.position.y = 0.222;
-  spritePlane.position.z = 0.002; // slightly in front of card
+  spritePlane.position.z = 0.01; // in front of card
   group.add(spritePlane);
 
   group.userData = {
