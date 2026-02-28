@@ -62,7 +62,10 @@ app.post('/api/parse-stats', async (req, res) => {
     const { description } = req.body;
     if (!description) return res.status(400).json({ error: 'description required' });
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      generationConfig: { responseMimeType: 'application/json' },
+    });
 
     const prompt = `You are a game designer creating monster card stats from a player's description.
 The player describes their monster: "${description}"
@@ -71,10 +74,10 @@ Convert this into card stats. Rules:
 - hp and attack are integers on a scale of 1-5 (1=very low, 2=low, 3=medium, 4=high, 5=very high)
 - attack represents how much HP damage this card deals when it hits
 - specialAbility is a unique named ability derived from the description (e.g. Poison, Freeze, Shield)
-- The ability description should explain exactly what it does in one short sentence (e.g. "Deals 1 damage each turn after hitting an enemy")
+- The ability description explains exactly what it does in one short sentence
 - Be creative and faithful to the description
 
-Respond ONLY with valid JSON, no explanation:
+Return JSON with this exact shape:
 {
   "name": "<short monster name>",
   "type": "<one of: Fire, Water, Grass, Electric, Psychic, Normal, Dark, Ice, Dragon, Fighting>",
@@ -82,17 +85,13 @@ Respond ONLY with valid JSON, no explanation:
   "attack": <1-5>,
   "specialAbility": {
     "name": "<ability name>",
-    "description": "<one sentence describing exactly what it does>"
+    "description": "<one sentence>"
   },
-  "flavor": "<one sentence flavor text for the card>"
+  "flavor": "<one sentence flavor text>"
 }`;
 
     const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-
-    // Strip markdown code fences if present
-    const json = text.replace(/^```json\n?/, '').replace(/\n?```$/, '');
-    const stats = JSON.parse(json);
+    const stats = JSON.parse(result.response.text());
 
     res.json({ stats });
   } catch (err) {
