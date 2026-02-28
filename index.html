@@ -828,6 +828,9 @@ async function lockCards() {
   if (cardsLocked) return;
   cachePositions();
 
+  console.log('[LOCK-DBG] PRE-DETACH p1: visible=' + p1CardGroup.visible + ' parent=' + p1CardGroup.parent?.type + ' children=' + p1CardGroup.children.length + ' cardTex.image=' + (p1CardGroup.userData.cardTex.image === p1CardGroup.userData.cardCanvas) + ' canvas=' + p1CardGroup.userData.cardCanvas.width + 'x' + p1CardGroup.userData.cardCanvas.height);
+  console.log('[LOCK-DBG] PRE-DETACH p2: visible=' + p2CardGroup.visible + ' parent=' + p2CardGroup.parent?.type);
+
   // Detach card groups from MindAR anchors and place in scene at cached world transforms
   p1ActiveAnchor.group.remove(p1CardGroup);
   p2ActiveAnchor.group.remove(p2CardGroup);
@@ -846,8 +849,17 @@ async function lockCards() {
   cardsLocked = true;
   console.log('[LOCK] Monster cards locked in place — no longer tracking');
 
+  console.log('[LOCK-DBG] POST-SCENE-ADD p1: visible=' + p1CardGroup.visible + ' parent=' + p1CardGroup.parent?.type + ' cardMat.opacity=' + p1CardGroup.userData.cardMat.opacity + ' cardMat.map=' + !!p1CardGroup.userData.cardMat.map + ' cardMat.visible=' + p1CardGroup.userData.cardMat.visible);
+  // Snapshot canvas state before entrance
+  const px = p1CardGroup.userData.cardCanvas.getContext('2d').getImageData(200, 100, 1, 1).data;
+  console.log('[LOCK-DBG] P1 canvas pixel at (200,100): rgba(' + px[0] + ',' + px[1] + ',' + px[2] + ',' + px[3] + ')');
+
   // Entrance pop animation
   await Promise.all([animEntrance(p1CardGroup), animEntrance(p2CardGroup)]);
+
+  console.log('[LOCK-DBG] POST-ENTRANCE p1: visible=' + p1CardGroup.visible + ' scale=' + p1CardGroup.scale.x.toFixed(2) + ' cardMat.opacity=' + p1CardGroup.userData.cardMat.opacity.toFixed(2) + ' parent=' + p1CardGroup.parent?.type);
+  const px2 = p1CardGroup.userData.cardCanvas.getContext('2d').getImageData(200, 100, 1, 1).data;
+  console.log('[LOCK-DBG] P1 canvas pixel AFTER entrance: rgba(' + px2[0] + ',' + px2[1] + ',' + px2[2] + ',' + px2[3] + ')');
   console.log('[LOCK] Entrance animation complete');
 }
 
@@ -1468,9 +1480,17 @@ async function init() {
       if (p1Animator) p1Animator.tick(dt);
       if (p2Animator) p2Animator.tick(dt);
 
-      // Force canvas texture re-upload every frame (workaround for mobile WebGL)
+      // Force canvas texture re-upload every frame
       if (p1CardGroup?.userData.cardTex) p1CardGroup.userData.cardTex.needsUpdate = true;
       if (p2CardGroup?.userData.cardTex) p2CardGroup.userData.cardTex.needsUpdate = true;
+
+      // Debug: every 3 seconds log full card state
+      if (started && p1CardGroup && now - (window._lastSpriteDbg || 0) > 3000) {
+        window._lastSpriteDbg = now;
+        const ud = p1CardGroup.userData;
+        const px = ud.cardCanvas.getContext('2d').getImageData(200, 100, 1, 1).data;
+        console.log(`[RENDER-DBG] P1: visible=${p1CardGroup.visible} scale=${p1CardGroup.scale.x.toFixed(2)} opacity=${ud.cardMat.opacity.toFixed(2)} matMap=${!!ud.cardMat.map} texImg=${ud.cardTex.image === ud.cardCanvas} texSrc=${ud.cardTex.source?.data === ud.cardCanvas} px=(${px[0]},${px[1]},${px[2]},${px[3]}) parent=${p1CardGroup.parent?.type} children=${p1CardGroup.children.length}`);
+      }
 
       if (p1Tracked && p2Tracked && started && !cardsLocked) cachePositions();
 
