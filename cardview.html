@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Card Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; font-family: system-ui, sans-serif; height: 100vh; overflow: hidden; touch-action: none; }
+
+  #toolbar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+    display: flex; gap: 6px; padding: 10px; background: #16213e;
+    justify-content: center; flex-wrap: wrap;
+  }
+  .toggle-btn {
+    padding: 12px 14px; border: 2px solid #555; border-radius: 10px;
+    background: #333; color: #fff; font-size: 14px; font-weight: 700;
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  .toggle-btn.on { background: #ffaa00; color: #000; border-color: #ffaa00; }
+
+  .card {
+    position: absolute; border: 3px solid #334; border-radius: 8px;
+    user-select: none; cursor: grab;
+    transition: opacity 0.15s, transform 0.15s;
+  }
+  .card.hidden { opacity: 0; pointer-events: none; transform: scale(0.8); }
+  .card img { display: block; width: 100%; border-radius: 5px; pointer-events: none; }
+  .card.active { border-color: #ffaa00; z-index: 10; }
+
+  #hint {
+    position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+    color: #555; font-size: 11px; pointer-events: none; z-index: 50;
+  }
+</style>
+</head><body>
+
+<div id="hint">Tap buttons to show/hide cards. Drag to move.</div>
+<div id="toolbar"></div>
+
+<script>
+// Size cards to fill screen nicely — monsters side by side in top half, abilities hidden until toggled
+const vw = window.innerWidth;
+const vh = window.innerHeight - 60; // toolbar space
+const cardW = Math.min(Math.floor(vw * 0.42), 350);
+const cardH = Math.floor(cardW * 1.4);
+const gap = Math.floor(vw * 0.04);
+
+const cards = [
+  { src: 'targets/p1-monster.png', label: 'P1', key: '1',
+    x: Math.floor(vw / 2 - cardW - gap / 2), y: Math.floor((vh - cardH) / 2), on: false },
+  { src: 'targets/p2-monster.png', label: 'P2', key: '2',
+    x: Math.floor(vw / 2 + gap / 2), y: Math.floor((vh - cardH) / 2), on: false },
+  { src: 'targets/basic-attack.png', label: 'Basic', key: 'q',
+    x: Math.floor(vw / 2 - cardW / 2), y: Math.floor((vh - cardH) / 2), on: false },
+  { src: 'targets/special-attack.png', label: 'Special', key: 'w',
+    x: Math.floor(vw / 2 - cardW / 2), y: Math.floor((vh - cardH) / 2), on: false },
+  { src: 'targets/ultimate-attack.png', label: 'Ultimate', key: 'e',
+    x: Math.floor(vw / 2 - cardW / 2), y: Math.floor((vh - cardH) / 2), on: false },
+];
+
+const toolbar = document.getElementById('toolbar');
+
+cards.forEach(c => {
+  const div = document.createElement('div');
+  div.className = 'card hidden';
+  div.style.left = c.x + 'px';
+  div.style.top = c.y + 'px';
+  div.style.width = cardW + 'px';
+  const img = document.createElement('img');
+  img.src = c.src;
+  div.appendChild(img);
+  document.body.appendChild(div);
+  c.el = div;
+
+  // Touch drag
+  let startX, startY, origX, origY;
+  div.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    startX = t.clientX; startY = t.clientY;
+    origX = div.offsetLeft; origY = div.offsetTop;
+    div.classList.add('active');
+  }, { passive: false });
+  div.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    div.style.left = (origX + t.clientX - startX) + 'px';
+    div.style.top = (origY + t.clientY - startY) + 'px';
+  }, { passive: false });
+  div.addEventListener('touchend', () => div.classList.remove('active'));
+
+  // Mouse drag
+  div.addEventListener('mousedown', e => {
+    div.classList.add('active');
+    const ox = e.clientX - div.offsetLeft;
+    const oy = e.clientY - div.offsetTop;
+    function move(e) { div.style.left = (e.clientX - ox) + 'px'; div.style.top = (e.clientY - oy) + 'px'; }
+    function up() { div.classList.remove('active'); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); }
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+
+  // Toggle button
+  const btn = document.createElement('div');
+  btn.className = 'toggle-btn';
+  btn.textContent = c.label;
+  btn.addEventListener('click', () => toggle(c));
+  toolbar.appendChild(btn);
+  c.btn = btn;
+});
+
+function toggle(c) {
+  c.on = !c.on;
+  c.el.classList.toggle('hidden', !c.on);
+  c.btn.classList.toggle('on', c.on);
+}
+
+// Keyboard shortcuts (for desktop)
+window.addEventListener('keydown', e => {
+  const c = cards.find(c => c.key === e.key.toLowerCase());
+  if (c) toggle(c);
+});
+</script>
+</body></html>

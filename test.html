@@ -179,7 +179,11 @@ fileInput.addEventListener('change', async (e) => {
     const res = await fetch('/api/imagen', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description: monster.description, type: monster.type }),
+      body: JSON.stringify({
+        description: monster.description,
+        image_description: monster.image_description,
+        type: monster.type,
+      }),
     });
     if (!res.ok) throw new Error('Imagen API error: ' + res.status);
     const imgData = await res.json();

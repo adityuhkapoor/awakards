@@ -20,7 +20,7 @@
 
 <h1>Compile .mind Targets</h1>
 <p class="info">
-  Generates 5 high-contrast card images and compiles them into <code>targets.mind</code>.<br>
+  Generates 5 high-contrast, feature-dense card images (1000x1400) and compiles them into <code>targets.mind</code>.<br>
   Target order: 0=P1 Monster, 1=P2 Monster, 2=Basic Attack, 3=Special Attack, 4=Ultimate Attack
 </p>
 
@@ -32,119 +32,248 @@
 import { Compiler } from 'https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js';
 
 const CARDS = [
-  { label: 'P1 MONSTER',     bg: '#1a3a1a', fg: '#00ff66', shape: 'diamond',  pattern: 'crosshatch' },
-  { label: 'P2 MONSTER',     bg: '#1a1a3a', fg: '#6688ff', shape: 'hexagon',  pattern: 'dots' },
-  { label: 'BASIC ATTACK',   bg: '#3a2a1a', fg: '#ff8800', shape: 'triangle', pattern: 'stripes' },
-  { label: 'SPECIAL ATTACK', bg: '#1a2a3a', fg: '#00ccff', shape: 'star',     pattern: 'zigzag' },
-  { label: 'ULTIMATE',       bg: '#3a1a2a', fg: '#ff44aa', shape: 'burst',    pattern: 'grid' },
+  { label: 'P1 MONSTER',     bg: '#f0f0e8', fg: '#1a6b1a', accent: '#0d4d0d', shape: 'diamond',  seed: 1 },
+  { label: 'P2 MONSTER',     bg: '#e8e8f0', fg: '#1a1a8b', accent: '#0d0d6b', shape: 'hexagon',  seed: 2 },
+  { label: 'BASIC ATTACK',   bg: '#f0ece0', fg: '#994400', accent: '#6b2e00', shape: 'triangle', seed: 3 },
+  { label: 'SPECIAL ATTACK', bg: '#e0ecf0', fg: '#006688', accent: '#004466', shape: 'star',     seed: 4 },
+  { label: 'ULTIMATE',       bg: '#f0e0ea', fg: '#8b1a55', accent: '#6b0d3d', shape: 'burst',    seed: 5 },
 ];
 
-const W = 400, H = 560;
+const W = 1000, H = 1400;
+
+// Simple seeded PRNG for reproducible patterns
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
 
 function drawCard(card) {
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
+  const rng = mulberry32(card.seed * 7919);
 
+  // Solid dark background
   ctx.fillStyle = card.bg;
   ctx.fillRect(0, 0, W, H);
 
-  // Pattern fill for tracking features
-  ctx.strokeStyle = card.fg + '33';
-  ctx.lineWidth = 1;
-  switch (card.pattern) {
-    case 'crosshatch':
-      for (let i = -H; i < W + H; i += 18) {
-        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + H, H); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(i + H, 0); ctx.lineTo(i, H); ctx.stroke();
-      }
-      break;
-    case 'dots':
-      for (let y = 10; y < H; y += 20)
-        for (let x = 10 + (y % 40 === 10 ? 0 : 10); x < W; x += 20) {
-          ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.stroke();
-        }
-      break;
-    case 'stripes':
-      for (let i = -H; i < W + H; i += 14) {
-        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + H, H); ctx.stroke();
-      }
-      break;
-    case 'zigzag':
-      for (let y = 0; y < H; y += 24) {
+  // LAYER 1: Dense scattered micro-shapes for feature points everywhere
+  // These create lots of unique, non-repeating edge features across the entire canvas
+  for (let i = 0; i < 400; i++) {
+    const x = rng() * W;
+    const y = rng() * H;
+    const size = 3 + rng() * 12;
+    const type = Math.floor(rng() * 5);
+    ctx.fillStyle = rng() > 0.5 ? card.fg + '66' : card.accent + '55';
+    ctx.strokeStyle = rng() > 0.5 ? card.fg + '88' : card.accent + '77';
+    ctx.lineWidth = 1 + rng() * 2;
+
+    switch (type) {
+      case 0: // small square
+        ctx.fillRect(x, y, size, size);
+        break;
+      case 1: // small circle
+        ctx.beginPath(); ctx.arc(x, y, size / 2, 0, Math.PI * 2); ctx.stroke();
+        break;
+      case 2: // small triangle
         ctx.beginPath();
-        for (let x = 0; x < W; x += 12) ctx.lineTo(x, y + (x % 24 < 12 ? 0 : 12));
+        ctx.moveTo(x, y - size); ctx.lineTo(x + size, y + size); ctx.lineTo(x - size, y + size);
+        ctx.closePath(); ctx.stroke();
+        break;
+      case 3: // cross
+        ctx.beginPath();
+        ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
+        ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
         ctx.stroke();
-      }
-      break;
-    case 'grid':
-      for (let x = 0; x < W; x += 16) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-      for (let y = 0; y < H; y += 16) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-      break;
+        break;
+      case 4: // dot cluster
+        for (let d = 0; d < 3; d++) {
+          ctx.beginPath();
+          ctx.arc(x + rng() * 10 - 5, y + rng() * 10 - 5, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+    }
   }
 
-  // Borders
-  ctx.strokeStyle = card.fg;
-  ctx.lineWidth = 6;
-  ctx.beginPath(); ctx.roundRect(8, 8, W - 16, H - 16, 16); ctx.stroke();
+  // LAYER 2: Asymmetric line patterns (unique per card, sharp edges)
   ctx.lineWidth = 2;
-  ctx.strokeStyle = card.fg + '88';
-  ctx.beginPath(); ctx.roundRect(18, 18, W - 36, H - 36, 12); ctx.stroke();
+  ctx.strokeStyle = card.fg + '77';
+  const lineCount = 30 + Math.floor(rng() * 20);
+  for (let i = 0; i < lineCount; i++) {
+    const x1 = rng() * W, y1 = rng() * H;
+    const x2 = x1 + (rng() - 0.5) * 300, y2 = y1 + (rng() - 0.5) * 300;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
 
-  // Center shape
-  const cx = W / 2, cy = H / 2 - 20;
-  ctx.fillStyle = card.fg;
+  // LAYER 3: Edge tick marks (features at borders for partial-occlusion tracking)
+  ctx.strokeStyle = card.fg + 'aa';
   ctx.lineWidth = 3;
+  for (let x = 20; x < W; x += 15 + Math.floor(rng() * 20)) {
+    const len = 8 + rng() * 20;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, len); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, H); ctx.lineTo(x, H - len); ctx.stroke();
+  }
+  for (let y = 20; y < H; y += 15 + Math.floor(rng() * 20)) {
+    const len = 8 + rng() * 20;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(len, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W, y); ctx.lineTo(W - len, y); ctx.stroke();
+  }
+
+  // LAYER 4: Corner markers (strong asymmetric features in all 4 corners)
+  const corners = [[30, 30], [W - 30, 30], [30, H - 30], [W - 30, H - 30]];
+  const cornerSymbols = ['◆', '●', '▲', '■'];
+  ctx.font = 'bold 36px monospace';
+  corners.forEach((pos, ci) => {
+    ctx.fillStyle = card.fg;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(cornerSymbols[ci], pos[0], pos[1]);
+    // Unique number near corner
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = card.accent;
+    ctx.fillText(String(card.seed * 10 + ci), pos[0] + (ci % 2 === 0 ? 30 : -30), pos[1]);
+    ctx.font = 'bold 36px monospace';
+  });
+
+  // LAYER 5: Multiple decorative borders (strong trackable edges)
+  ctx.strokeStyle = card.fg;
+  ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.roundRect(10, 10, W - 20, H - 20, 20); ctx.stroke();
+  ctx.strokeStyle = card.accent;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.roundRect(22, 22, W - 44, H - 44, 16); ctx.stroke();
+  ctx.strokeStyle = card.fg + '88';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(32, 32, W - 64, H - 64, 12); ctx.stroke();
+
+  // LAYER 6: Prominent center shape (large, filled, high contrast)
+  const cx = W / 2, cy = H / 2 - 40;
+  ctx.fillStyle = card.fg;
+  ctx.strokeStyle = card.accent;
+  ctx.lineWidth = 4;
+
   switch (card.shape) {
-    case 'diamond':
+    case 'diamond': {
+      const s = 160;
       ctx.beginPath();
-      ctx.moveTo(cx, cy - 80); ctx.lineTo(cx + 60, cy);
-      ctx.lineTo(cx, cy + 80); ctx.lineTo(cx - 60, cy);
-      ctx.closePath(); ctx.fill(); break;
-    case 'hexagon':
+      ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s * 0.75, cy);
+      ctx.lineTo(cx, cy + s); ctx.lineTo(cx - s * 0.75, cy);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      // Inner detail
+      ctx.strokeStyle = card.bg;
+      ctx.lineWidth = 3;
+      const s2 = s * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s2); ctx.lineTo(cx + s2 * 0.75, cy);
+      ctx.lineTo(cx, cy + s2); ctx.lineTo(cx - s2 * 0.75, cy);
+      ctx.closePath(); ctx.stroke();
+      break;
+    }
+    case 'hexagon': {
+      const r = 150;
       ctx.beginPath();
       for (let i = 0; i < 6; i++) {
         const a = Math.PI / 3 * i - Math.PI / 6;
-        ctx.lineTo(cx + 70 * Math.cos(a), cy + 70 * Math.sin(a));
+        ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
       }
-      ctx.closePath(); ctx.fill(); break;
-    case 'triangle':
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      // Inner hexagon
+      ctx.strokeStyle = card.bg;
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(cx, cy - 80); ctx.lineTo(cx + 70, cy + 50); ctx.lineTo(cx - 70, cy + 50);
-      ctx.closePath(); ctx.fill(); break;
-    case 'star':
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 3 * i;
+        ctx.lineTo(cx + r * 0.5 * Math.cos(a), cy + r * 0.5 * Math.sin(a));
+      }
+      ctx.closePath(); ctx.stroke();
+      break;
+    }
+    case 'triangle': {
+      const s = 170;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s * 0.9, cy + s * 0.6); ctx.lineTo(cx - s * 0.9, cy + s * 0.6);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = card.bg;
+      ctx.lineWidth = 3;
+      const s2 = s * 0.45;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s2); ctx.lineTo(cx + s2 * 0.9, cy + s2 * 0.6); ctx.lineTo(cx - s2 * 0.9, cy + s2 * 0.6);
+      ctx.closePath(); ctx.stroke();
+      break;
+    }
+    case 'star': {
+      const outer = 150, inner = 60;
       ctx.beginPath();
       for (let i = 0; i < 10; i++) {
         const a = Math.PI / 5 * i - Math.PI / 2;
-        ctx.lineTo(cx + (i % 2 === 0 ? 70 : 30) * Math.cos(a), cy + (i % 2 === 0 ? 70 : 30) * Math.sin(a));
+        const r = i % 2 === 0 ? outer : inner;
+        ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
       }
-      ctx.closePath(); ctx.fill(); break;
-    case 'burst':
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      // Center dot
+      ctx.fillStyle = card.bg;
+      ctx.beginPath(); ctx.arc(cx, cy, 20, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case 'burst': {
+      const outer = 160, inner = 70;
       ctx.beginPath();
-      for (let i = 0; i < 16; i++) {
-        const a = Math.PI / 8 * i - Math.PI / 2;
-        ctx.lineTo(cx + (i % 2 === 0 ? 75 : 35) * Math.cos(a), cy + (i % 2 === 0 ? 75 : 35) * Math.sin(a));
+      for (let i = 0; i < 24; i++) {
+        const a = Math.PI / 12 * i - Math.PI / 2;
+        const r = i % 2 === 0 ? outer : inner;
+        ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
       }
-      ctx.closePath(); ctx.fill(); break;
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      // Inner ring
+      ctx.strokeStyle = card.bg;
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(cx, cy, 45, 0, Math.PI * 2); ctx.stroke();
+      break;
+    }
   }
 
-  // Corner markers
-  ctx.fillStyle = card.fg + 'cc';
-  ctx.font = 'bold 20px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(card.label[0] + card.label[1], 28, 42);
-  ctx.textAlign = 'right';
-  ctx.fillText(card.label[0] + card.label[1], W - 28, H - 26);
-
-  // Label
-  ctx.fillStyle = card.fg;
-  ctx.font = 'bold 28px system-ui, sans-serif';
+  // LAYER 7: Scattered unique glyphs (breaks repetition, adds asymmetry)
+  const glyphs = ['⚡', '★', '◇', '⬡', '⊕', '△', '⬟', '☆', '⊗', '⬢', '✦', '◈'];
+  ctx.font = '20px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(card.label, cx, H - 60);
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < 25; i++) {
+    const x = 60 + rng() * (W - 120);
+    const y = 60 + rng() * (H - 120);
+    // Skip if too close to center shape
+    if (Math.abs(x - cx) < 180 && Math.abs(y - cy) < 200) continue;
+    ctx.fillStyle = (rng() > 0.5 ? card.fg : card.accent) + '99';
+    ctx.fillText(glyphs[Math.floor(rng() * glyphs.length)], x, y);
+  }
 
-  ctx.font = '11px monospace';
-  ctx.fillStyle = card.fg + '66';
-  ctx.fillText('AWK-' + card.shape.toUpperCase(), cx, H - 38);
+  // LAYER 8: Label text (large, high contrast)
+  ctx.fillStyle = card.fg;
+  ctx.font = 'bold 56px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(card.label, cx, H - 140);
+
+  // Subtitle with unique ID
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = card.accent + 'cc';
+  ctx.fillText('AWK-' + card.shape.toUpperCase() + '-' + card.seed, cx, H - 90);
+
+  // LAYER 9: Additional asymmetric marks along sides
+  ctx.fillStyle = card.fg + 'cc';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'left';
+  for (let y = 80; y < H - 80; y += 100 + Math.floor(rng() * 60)) {
+    ctx.fillText(String(Math.floor(rng() * 999)).padStart(3, '0'), 40, y);
+  }
+  ctx.textAlign = 'right';
+  for (let y = 120; y < H - 80; y += 100 + Math.floor(rng() * 60)) {
+    ctx.fillText(String(Math.floor(rng() * 999)).padStart(3, '0'), W - 40, y);
+  }
 
   return c;
 }
@@ -161,13 +290,13 @@ document.getElementById('compile-btn').addEventListener('click', async () => {
   document.getElementById('previews').replaceChildren();
   logEl.textContent = '';
 
-  log('Generating 5 card images...');
+  log('Generating 5 feature-dense card images (1000x1400)...');
   const canvases = CARDS.map((card, i) => {
     const c = drawCard(card);
     const preview = document.createElement('canvas');
-    preview.width = 120; preview.height = 168;
+    preview.width = 150; preview.height = 210;
     preview.title = `Target ${i}: ${card.label}`;
-    preview.getContext('2d').drawImage(c, 0, 0, 120, 168);
+    preview.getContext('2d').drawImage(c, 0, 0, 150, 210);
     document.getElementById('previews').appendChild(preview);
     log(`  [${i}] ${card.label} — ${W}x${H}`);
     return c;
@@ -181,11 +310,14 @@ document.getElementById('compile-btn').addEventListener('click', async () => {
   }
   log(`  ${images.length} images ready`);
 
-  log('\nCompiling .mind file (this takes 30-60s)...');
+  log('\nCompiling .mind file (this takes 30-90s at higher resolution)...');
   try {
     const compiler = new Compiler();
+    let lastPct = -1;
     await compiler.compileImageTargets(images, (progress) => {
-      log(`  Progress: ${(progress * 100).toFixed(0)}%`);
+      // MindAR reports per-target progress (0-1 per image, not overall)
+      const pct = Math.min(Math.round(progress * 100 / images.length), 100);
+      if (pct > lastPct) { log(`  Progress: ${pct}%`); lastPct = pct; }
     });
     log('Compilation complete! Exporting...');
 
@@ -215,6 +347,8 @@ document.getElementById('compile-btn').addEventListener('click', async () => {
       dl.click();
       URL.revokeObjectURL(pngUrl);
       log(`  Downloaded ${names[i]}.png`);
+      // Small delay to avoid Chrome blocking rapid downloads
+      await new Promise(r => setTimeout(r, 300));
     }
   } catch (err) {
     log('\nERROR: ' + err.message);

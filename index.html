@@ -39,6 +39,23 @@
   })();
   </script>
 
+  <!-- Monkey-patch getUserMedia BEFORE MindAR loads to request higher resolution -->
+  <script>
+  (function() {
+    const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = function(constraints) {
+      if (constraints && constraints.video && typeof constraints.video === 'object') {
+        constraints.video.width = { ideal: 1920 };
+        constraints.video.height = { ideal: 1080 };
+        constraints.video.frameRate = { ideal: 30 };
+      } else if (constraints && constraints.video === true) {
+        constraints.video = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }, facingMode: 'environment' };
+      }
+      return origGUM(constraints);
+    };
+  })();
+  </script>
+
   <script type="importmap">
   {
     "imports": {
@@ -154,6 +171,15 @@
       position: fixed; bottom: 80px; right: 8px; z-index: 10;
       color: #0f0; font-size: 11px; font-family: monospace; pointer-events: none;
     }
+
+    /* --- Demo mode button --- */
+    #demo-btn {
+      position: fixed; bottom: 16px; right: 16px; z-index: 15;
+      padding: 10px 16px; border: 1px solid #555; border-radius: 8px;
+      background: rgba(50,50,50,0.8); color: #aaa; font-size: 12px; font-weight: 600;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    #demo-btn:active { background: rgba(80,80,80,0.9); }
   </style>
 </head>
 <body>
@@ -164,12 +190,12 @@
 
 <div id="hud">
   <div class="hp-wrap">
-    <div class="hp-label">YOUR MONSTER</div>
+    <div class="hp-label" id="p1-label">P1</div>
     <div class="hp-track"><div class="hp-fill p1" id="p1-fill" style="width:100%"></div></div>
     <div class="hp-num" id="p1-num">100 / 100</div>
   </div>
   <div class="hp-wrap">
-    <div class="hp-label">ENEMY</div>
+    <div class="hp-label" id="p2-label">P2</div>
     <div class="hp-track"><div class="hp-fill p2" id="p2-fill" style="width:100%"></div></div>
     <div class="hp-num" id="p2-num">100 / 100</div>
   </div>
@@ -182,7 +208,9 @@
 <div id="game-over">
   <h1 id="go-title">VICTORY!</h1>
   <p id="go-sub">Your monster wins!</p>
+  <button id="play-again" style="margin-top:20px;padding:14px 28px;border:none;border-radius:12px;background:#ffaa00;color:#000;font-size:16px;font-weight:700;cursor:pointer;">PLAY AGAIN</button>
 </div>
+<button id="mute-btn" style="position:fixed;top:16px;right:16px;z-index:15;padding:8px 12px;border:1px solid #555;border-radius:8px;background:rgba(0,0,0,0.6);color:#fff;font-size:16px;cursor:pointer;display:none;">&#x1f50a;</button>
 
 <div id="radial-timer">
   <svg viewBox="0 0 108 108">
@@ -194,6 +222,7 @@
 
 <div id="narration"></div>
 <div id="flash"></div>
+<div id="demo-btn">DEMO MODE</div>
 <div id="fps"></div>
 
 <script type="module">
@@ -222,8 +251,10 @@ let over        = false;
 let busy        = false;       // animation lock
 let p1Tracked   = false;
 let p2Tracked   = false;
+let cardsLocked = false;       // once true, monster cards stay in place
 
 const cachedPos = { p1: new THREE.Vector3(), p2: new THREE.Vector3() };
+const cachedQuat = { p1: new THREE.Quaternion(), p2: new THREE.Quaternion() };
 
 /* ==========================================================
    DOM
@@ -236,6 +267,162 @@ const turnEl   = $('#turn-msg');
 const goEl     = $('#game-over');
 const flashEl  = $('#flash');
 const fpsEl    = $('#fps');
+const demoBtn  = $('#demo-btn');
+const muteBtn  = $('#mute-btn');
+const playAgainBtn = $('#play-again');
+let demoMode   = false;
+let ttsEnabled = true;
+let demoScriptRunning = false;
+const AUTO_DEMO = new URLSearchParams(window.location.search).get('demo') === '1';
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForCondition(pred, timeoutMs = 6000, intervalMs = 50) {
+  const t0 = performance.now();
+  while (performance.now() - t0 < timeoutMs) {
+    if (pred()) return true;
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
+async function setupDemoBoard() {
+  demoMode = true;
+  demoBtn.style.display = 'none';
+  console.log('[DEMO] Demo mode activated');
+  renderer.setClearColor(0x111111, 1);
+  if (mindar.video) mindar.video.style.display = 'none';
+
+  // Place card groups at fixed positions in front of camera
+  p1CardGroup.position.set(-0.4, 0.1, -1.2);
+  p2CardGroup.position.set(0.4, 0.1, -1.2);
+
+  // Add directly to scene (not to anchors)
+  if (p1CardGroup.parent) p1CardGroup.parent.remove(p1CardGroup);
+  if (p2CardGroup.parent) p2CardGroup.parent.remove(p2CardGroup);
+  scene.add(p1CardGroup);
+  scene.add(p2CardGroup);
+
+  // Make them face the camera
+  p1CardGroup.lookAt(camera.position);
+  p2CardGroup.lookAt(camera.position);
+
+  // Simulate "card placement" with staggered entrance pops
+  p1CardGroup.scale.set(0, 0, 0);
+  p2CardGroup.scale.set(0, 0, 0);
+  p1CardGroup.userData.cardMat.opacity = 0;
+  p2CardGroup.userData.cardMat.opacity = 0;
+  p1CardGroup.userData.glowMat.opacity = 0;
+  p2CardGroup.userData.glowMat.opacity = 0;
+
+  statusEl.style.opacity = '1';
+  statusEl.textContent = 'Demo: Place P1 monster card';
+  await animEntrance(p1CardGroup);
+  await sleep(450);
+  statusEl.textContent = 'Demo: Place P2 monster card';
+  await animEntrance(p2CardGroup);
+  await sleep(300);
+
+  // Set cached positions for projectiles
+  p1CardGroup.getWorldPosition(cachedPos.p1);
+  p2CardGroup.getWorldPosition(cachedPos.p2);
+  p1CardGroup.getWorldQuaternion(cachedQuat.p1);
+  p2CardGroup.getWorldQuaternion(cachedQuat.p2);
+
+  cardsLocked = true;
+}
+
+async function runDemoScript() {
+  if (started || over || demoScriptRunning) return;
+  demoScriptRunning = true;
+  await setupDemoBoard();
+  p1Tracked = true;
+  p2Tracked = true;
+  beginGame();
+
+  // Wait for combat to be ready, then auto-play the script.
+  const ready = await waitForCondition(() => started && !busy && !over && currentPlayer === 1, 5000);
+  if (!ready) {
+    console.warn('[DEMO] Could not start scripted combat');
+    demoScriptRunning = false;
+    return;
+  }
+
+  const p1s = DEMO_MONSTERS.p1.skills;
+  const p2s = DEMO_MONSTERS.p2.skills;
+  await sleep(600);
+  await attackFromAbilityCard({ tier: 'basic', name: p1s[0].name, damage: p1s[0].damage });
+  await waitForCondition(() => !busy && !over && currentPlayer === 2, 5000);
+  await sleep(600);
+  await attackFromAbilityCard({ tier: 'special', name: p2s[1].name, damage: p2s[1].damage });
+  await waitForCondition(() => !busy && !over && currentPlayer === 1, 5000);
+  await sleep(600);
+  await attackFromAbilityCard({ tier: 'ultimate', name: p1s[2].name, damage: p1s[2].damage });
+
+  demoScriptRunning = false;
+}
+
+demoBtn.addEventListener('click', () => {
+  if (started || over || demoScriptRunning) return;
+  runDemoScript();
+});
+
+// Mute toggle
+muteBtn.addEventListener('click', () => {
+  ttsEnabled = !ttsEnabled;
+  muteBtn.textContent = ttsEnabled ? '\u{1F50A}' : '\u{1F507}';
+  if (!ttsEnabled) speechSynthesis.cancel();
+});
+
+// Play Again
+playAgainBtn.addEventListener('click', () => {
+  const wasDemo = demoMode || AUTO_DEMO;
+
+  // Reset state
+  p1HP = MAX_HP; p2HP = MAX_HP;
+  started = false; over = false; busy = false;
+  cardsLocked = false; demoMode = false; demoScriptRunning = false;
+  currentPlayer = 1; turnCount = 0;
+  abilityDetected = null; abilityConfirmed = false;
+  speechSynthesis.cancel();
+
+  // Reset UI
+  syncHP();
+  goEl.style.display = 'none';
+  hudEl.style.display = 'none';
+  muteBtn.style.display = 'none';
+  skillsEl.style.display = 'none';
+  statusEl.style.opacity = '1';
+  p1Tracked = false; p2Tracked = false;
+
+  // Reset card group visuals
+  [p1CardGroup, p2CardGroup].forEach(cg => {
+    if (!cg) return;
+    scene.remove(cg);
+    cg.scale.set(1, 1, 1);
+    cg.userData.cardMat.opacity = 1;
+    cg.userData.glowMat.opacity = 0.6;
+    cg.userData.alive = true;
+    updateCardHP(cg, MAX_HP);
+  });
+
+  if (wasDemo) {
+    // Re-run demo — cards go back into scene at fixed positions
+    console.log('[GAME] Reset — restarting demo');
+    runDemoScript();
+  } else {
+    // AR mode — re-attach to MindAR anchors, wait for tracking
+    statusEl.textContent = 'Point camera at both cards';
+    demoBtn.style.display = 'block';
+    a0.group.add(p1CardGroup);
+    p1CardGroup.position.set(0, 0.1, 0);
+    a1.group.add(p2CardGroup);
+    p2CardGroup.position.set(0, 0.1, 0);
+    console.log('[GAME] Reset — waiting for cards');
+  }
+});
 
 /* ==========================================================
    MINDAR + THREE SETUP
@@ -244,10 +431,10 @@ const mindar = new MindARThree({
   container: $('#container'),
   imageTargetSrc: 'targets/targets.mind',
   maxTrack: 3,
-  filterMinCF: 1,
-  filterBeta: 10000,
-  missTolerance: 5,
-  warmupTolerance: 5,
+  filterMinCF: 0.0001,
+  filterBeta: 0.001,
+  missTolerance: 3,
+  warmupTolerance: 1,
 });
 
 const { renderer, scene, camera } = mindar;
@@ -389,24 +576,24 @@ function makeGlowCanvas(type) {
    ========================================================== */
 const DEMO_MONSTERS = {
   p1: {
-    name: 'Ceramic Golem', type: 'nature', hp: 100, maxHP: 100,
-    description: 'A hulking golem forged from glazed ceramic shards, with moss growing between the cracks.',
+    name: 'Flimsprite', type: 'shadow', hp: 100, maxHP: 100,
+    description: 'Though frail and lacking in power, Flimsprite\'s agility makes it difficult to pin down.',
     skills: [
-      { name: 'Shard Toss', color: '#00cc44', description: 'Hurls razor-sharp ceramic fragments' },
-      { name: 'Moss Bind', color: '#66ff88', description: 'Entangling vines erupt from cracks' },
-      { name: 'Kiln Eruption', color: '#ff8800', description: 'Superheated clay explosion' },
+      { name: 'Mind Slap', color: '#ff69b4', damage: 20, description: 'A quick psychic jab' },
+      { name: 'Phase Shift', color: '#cc66ff', damage: 30, description: 'Phases out and counters' },
+      { name: 'Astral Burst', color: '#ff44aa', damage: 55, description: 'Devastating psychic nova' },
     ],
-    portrait: null,
+    portrait: 'portraits/p1.png',
   },
   p2: {
-    name: 'Frost Serpent', type: 'ice', hp: 100, maxHP: 100,
-    description: 'A sinuous ice serpent with crystalline scales that refract light into prismatic daggers.',
+    name: 'Licking Spider', type: 'shadow', hp: 100, maxHP: 100,
+    description: 'Beware the viscous touch of this arachnid\'s tongue; it leaves foes disoriented.',
     skills: [
-      { name: 'Frost Fang', color: '#0099ff', description: 'Icy bite that chills to the bone' },
-      { name: 'Glacial Coil', color: '#66ccff', description: 'Wraps prey in freezing spirals' },
-      { name: 'Absolute Zero', color: '#ffffff', description: 'Flash-freezes everything nearby' },
+      { name: 'Slimy Lick', color: '#cc8844', damage: 15, description: 'Slimes the target, disrupting aim' },
+      { name: 'Web Tangle', color: '#aa6633', damage: 25, description: 'Sticky threads bind the foe' },
+      { name: 'Venom Burst', color: '#ff6600', damage: 70, description: 'Explosive toxic eruption' },
     ],
-    portrait: null,
+    portrait: 'portraits/p2.png',
   },
 };
 
@@ -479,11 +666,12 @@ const aSpecial = mindar.addAnchor(3);  // Special attack
 const aUlt     = mindar.addAnchor(4);  // Ultimate attack
 
 a0.onTargetFound = () => { p1Tracked = true;  console.log('[TRACK] P1 Monster FOUND'); onTrack(); };
-a0.onTargetLost  = () => { p1Tracked = false; console.log('[TRACK] P1 Monster LOST');  onTrack(); };
+a0.onTargetLost  = () => { if (!cardsLocked) { p1Tracked = false; console.log('[TRACK] P1 Monster LOST'); onTrack(); } };
 a1.onTargetFound = () => { p2Tracked = true;  console.log('[TRACK] P2 Monster FOUND'); onTrack(); };
-a1.onTargetLost  = () => { p2Tracked = false; console.log('[TRACK] P2 Monster LOST');  onTrack(); };
+a1.onTargetLost  = () => { if (!cardsLocked) { p2Tracked = false; console.log('[TRACK] P2 Monster LOST'); onTrack(); } };
 
 function onTrack() {
+  if (demoMode) return;
   if (p1Tracked && p2Tracked) {
     cachePositions();
     if (!started && !over) beginGame();
@@ -498,6 +686,35 @@ function onTrack() {
 function cachePositions() {
   a0.group.getWorldPosition(cachedPos.p1);
   a1.group.getWorldPosition(cachedPos.p2);
+  a0.group.getWorldQuaternion(cachedQuat.p1);
+  a1.group.getWorldQuaternion(cachedQuat.p2);
+}
+
+async function lockCards() {
+  if (cardsLocked) return;
+  cachePositions();
+
+  // Detach card groups from MindAR anchors and place in scene at cached world transforms
+  a0.group.remove(p1CardGroup);
+  a1.group.remove(p2CardGroup);
+
+  p1CardGroup.position.copy(cachedPos.p1);
+  p1CardGroup.position.y += 0.1;
+  p1CardGroup.quaternion.copy(cachedQuat.p1);
+
+  p2CardGroup.position.copy(cachedPos.p2);
+  p2CardGroup.position.y += 0.1;
+  p2CardGroup.quaternion.copy(cachedQuat.p2);
+
+  scene.add(p1CardGroup);
+  scene.add(p2CardGroup);
+
+  cardsLocked = true;
+  console.log('[LOCK] Monster cards locked in place — no longer tracking');
+
+  // Entrance pop animation
+  await Promise.all([animEntrance(p1CardGroup), animEntrance(p2CardGroup)]);
+  console.log('[LOCK] Entrance animation complete');
 }
 
 async function initCardGroups() {
@@ -518,11 +735,9 @@ async function initCardGroups() {
 /* ==========================================================
    ABILITY CARD DETECTION + RADIAL TIMER
    ========================================================== */
-const ABILITY_TARGETS = {
-  2: { tier: 'basic',    name: 'Basic Attack',   damage: 25 },
-  3: { tier: 'special',  name: 'Special Attack',  damage: 20 },
-  4: { tier: 'ultimate', name: 'Ultimate Attack',  damage: 65 },
-};
+// Maps physical card target index → skill slot (0=basic, 1=special, 2=ultimate)
+const ABILITY_SLOT = { 2: 0, 3: 1, 4: 2 };
+const ABILITY_TIERS = ['basic', 'special', 'ultimate'];
 const CONFIRM_TIME = 2000;
 let currentPlayer = 1;
 let abilityDetected = null;
@@ -535,9 +750,13 @@ const timerFill = $('#timer-fill');
 const timerLabel = $('#radial-label');
 
 function onAbilityFound(targetIndex) {
+  if (demoMode) return;
   if (!started || busy || over || abilityConfirmed) return;
-  const ability = ABILITY_TARGETS[targetIndex];
-  if (!ability) return;
+  const slot = ABILITY_SLOT[targetIndex];
+  if (slot === undefined) return;
+  const monster = currentPlayer === 1 ? DEMO_MONSTERS.p1 : DEMO_MONSTERS.p2;
+  const sk = monster.skills[slot];
+  const ability = { tier: ABILITY_TIERS[slot], name: sk.name, damage: sk.damage || 25 };
   console.log(`[ABILITY] ${ability.name} detected (target ${targetIndex})`);
   abilityDetected = { ...ability, targetIndex };
   abilityDetectStart = performance.now();
@@ -547,6 +766,7 @@ function onAbilityFound(targetIndex) {
 }
 
 function onAbilityLost(targetIndex) {
+  if (demoMode) return;
   if (!abilityDetected || abilityDetected.targetIndex !== targetIndex) return;
   if (abilityConfirmed) return;
   console.log(`[ABILITY] ${abilityDetected.name} lost`);
@@ -603,6 +823,7 @@ async function attackFromAbilityCard(ability) {
   await new Promise(done => {
     spawnProjectile(from, to, cfg, async () => {
       if (cfg.flash) screenFlash();
+      sfxHit(ability.tier);
 
       if (isP1) p2HP -= damage; else p1HP -= damage;
       console.log(`[HP] P1: ${p1HP}/${MAX_HP} | P2: ${p2HP}/${MAX_HP}`);
@@ -617,11 +838,14 @@ async function attackFromAbilityCard(ability) {
       const dead = isP1 ? p2HP <= 0 : p1HP <= 0;
       if (dead) {
         console.log(`[GAME] P${isP1 ? 2 : 1} DEFEATED`);
+        sfxDeath();
         await animDeath(defr);
         over = true;
-        $('#go-title').textContent = isP1 ? 'P1 WINS!' : 'P2 WINS!';
+        const winner = isP1 ? DEMO_MONSTERS.p1 : DEMO_MONSTERS.p2;
+        const loser  = isP1 ? DEMO_MONSTERS.p2 : DEMO_MONSTERS.p1;
+        $('#go-title').textContent = winner.name.toUpperCase() + ' WINS!';
         $('#go-title').style.color = '#ffaa00';
-        $('#go-sub').textContent = `${isP1 ? DEMO_MONSTERS.p1.name : DEMO_MONSTERS.p2.name} is victorious!`;
+        $('#go-sub').textContent = `${loser.name} has been defeated!`;
         goEl.style.display = 'flex';
       } else {
         await animHit(defr);
@@ -650,25 +874,22 @@ async function attackFromAbilityCard(ability) {
    ========================================================== */
 function renderSkillButtons(monster) {
   const skills = monster.skills || [];
-  const damages = [25, 20, 65];
+  const tiers = ['basic', 'special', 'ultimate'];
   const classes = ['fireball', 'ice', 'ultimate'];
   skillsEl.replaceChildren();
   skills.forEach((sk, i) => {
+    const dmgVal = sk.damage || 25;
     const btn = document.createElement('button');
     btn.className = 'skill-btn ' + classes[i];
-    btn.dataset.tier = ['basic', 'special', 'ultimate'][i];
-    btn.dataset.damage = String(damages[i]);
     btn.textContent = sk.name;
     const dmg = document.createElement('span');
     dmg.className = 'skill-dmg';
-    dmg.textContent = damages[i] + ' DMG';
+    dmg.textContent = dmgVal + ' DMG';
     btn.appendChild(dmg);
     btn.addEventListener('click', e => {
       e.preventDefault();
       if (busy || over) return;
-      const tier = btn.dataset.tier;
-      const ability = { tier, name: sk.name, damage: damages[i] };
-      attackFromAbilityCard(ability);
+      attackFromAbilityCard({ tier: tiers[i], name: sk.name, damage: dmgVal });
     });
     skillsEl.appendChild(btn);
   });
@@ -678,11 +899,18 @@ function renderSkillButtons(monster) {
    GAME START
    ========================================================== */
 function beginGame() {
+  if (started || over) return;
+  demoBtn.style.display = 'none';
   console.log('[GAME] Both cards tracked — FIGHT START');
   started = true;
   currentPlayer = 1;
+  lockCards();
   statusEl.style.opacity = '0';
   hudEl.style.display = 'flex';
+  muteBtn.style.display = 'block';
+  $('#p1-label').textContent = DEMO_MONSTERS.p1.name.toUpperCase();
+  $('#p2-label').textContent = DEMO_MONSTERS.p2.name.toUpperCase();
+  sfxFightStart();
   flash('FIGHT!', 1000, () => {
     renderSkillButtons(DEMO_MONSTERS.p1);
     setSkills(true);
@@ -734,6 +962,65 @@ function screenFlash() {
 }
 
 /* ==========================================================
+   SYNTHESIZED SFX (Web Audio API — no external files)
+   ========================================================== */
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function sfxFightStart() {
+  const ctx = getAudioCtx();
+  // Rising sweep + punch
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(200, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.3);
+  gain.gain.setValueAtTime(0.3, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime + 0.5);
+}
+
+function sfxHit(tier) {
+  const ctx = getAudioCtx();
+  // Noise burst scaled by tier
+  const dur = tier === 'ultimate' ? 0.35 : tier === 'special' ? 0.2 : 0.12;
+  const vol = tier === 'ultimate' ? 0.4 : tier === 'special' ? 0.25 : 0.15;
+  const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(vol, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + dur);
+  // Low-pass for deeper thud on ultimate
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = tier === 'ultimate' ? 600 : tier === 'special' ? 1200 : 2400;
+  src.connect(filter).connect(gain).connect(ctx.destination);
+  src.start();
+}
+
+function sfxDeath() {
+  const ctx = getAudioCtx();
+  // Descending tone + noise
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(400, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.6);
+  gain.gain.setValueAtTime(0.2, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.7);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime + 0.7);
+}
+
+/* ==========================================================
    NARRATION
    ========================================================== */
 const narrationEl = $('#narration');
@@ -764,6 +1051,15 @@ function showNarration(text) {
   narrationEl.textContent = text;
   narrationEl.style.opacity = '1';
   narrationTimer = setTimeout(() => { narrationEl.style.opacity = '0'; }, 3500);
+
+  // TTS
+  if (ttsEnabled && 'speechSynthesis' in window) {
+    speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 1.1;
+    utt.pitch = 0.9;
+    speechSynthesis.speak(utt);
+  }
 }
 
 /* ==========================================================
@@ -919,6 +1215,30 @@ function animDeath(cardGroup) {
 }
 
 /* ==========================================================
+   ENTRANCE ANIMATION
+   ========================================================== */
+function animEntrance(cardGroup) {
+  return new Promise(r => {
+    cardGroup.scale.set(0, 0, 0);
+    cardGroup.userData.cardMat.opacity = 0;
+    cardGroup.userData.glowMat.opacity = 0;
+    const t0 = performance.now();
+    (function tick() {
+      const t = Math.min((performance.now() - t0) / 400, 1);
+      // Ease-out-back: overshoot then settle
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      const ease = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+      cardGroup.scale.setScalar(ease);
+      cardGroup.userData.cardMat.opacity = Math.min(t * 2, 1);
+      cardGroup.userData.glowMat.opacity = Math.min(t * 1.5, 0.6);
+      if (t >= 1) return r();
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+
+/* ==========================================================
    IDLE BOB
    ========================================================== */
 function bob(cardGroup, t) {
@@ -974,15 +1294,7 @@ fpsEl.addEventListener('click', () => {
    MAIN LOOP
    ========================================================== */
 async function init() {
-  try {
-    console.log('[INIT] Creating card groups...');
-    await initCardGroups();
-    console.log('[INIT] Starting MindAR...');
-    statusEl.textContent = 'Starting camera...';
-    await mindar.start();
-    console.log('[INIT] MindAR started, camera active');
-    statusEl.textContent = 'Point camera at both cards';
-
+  const startRenderLoop = () => {
     renderer.setAnimationLoop(() => {
       const now = performance.now();
 
@@ -991,7 +1303,7 @@ async function init() {
       bob(p1CardGroup, now / 1000);
       bob(p2CardGroup, now / 1000);
 
-      if (p1Tracked && p2Tracked && started) cachePositions();
+      if (p1Tracked && p2Tracked && started && !cardsLocked) cachePositions();
 
       frames++;
       if (now - lastFps >= 1000) {
@@ -1002,6 +1314,45 @@ async function init() {
 
       renderer.render(scene, camera);
     });
+  };
+
+  const initDemoSim = async () => {
+    console.log('[INIT] Starting camera-free demo mode');
+    statusEl.textContent = 'Preparing demo scene...';
+    await initCardGroups();
+    renderer.setClearColor(0x111111, 1);
+    if (mindar.video) mindar.video.style.display = 'none';
+    camera.position.set(0, 0, 0);
+    camera.lookAt(0, 0, -1);
+    startRenderLoop();
+    setTimeout(() => runDemoScript(), 200);
+  };
+
+  const initLiveAR = async () => {
+    console.log('[INIT] Creating card groups...');
+    await initCardGroups();
+    console.log('[INIT] Starting MindAR...');
+    statusEl.textContent = 'Starting camera...';
+    await mindar.start();
+    console.log('[INIT] MindAR started, camera active');
+
+    // Enable continuous autofocus if supported
+    try {
+      const stream = mindar.video.srcObject;
+      const [track] = stream.getVideoTracks();
+      await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+      console.log('[INIT] Autofocus: continuous');
+    } catch (e) {
+      console.warn('[INIT] Autofocus not supported:', e.message);
+    }
+
+    statusEl.textContent = 'Point camera at both cards';
+    startRenderLoop();
+  };
+
+  try {
+    if (AUTO_DEMO) await initDemoSim();
+    else await initLiveAR();
   } catch (err) {
     console.error('MindAR error:', err);
     statusEl.textContent = 'Camera error: ' + (err?.message || 'Camera permission denied. Reload and allow access.');
