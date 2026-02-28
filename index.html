@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Awakards</title>
+
+  <!-- Remote log relay: captures console.* and POSTs to server for Claude to read -->
+  <script>
+  (function() {
+    const Q = [];
+    let timer = null;
+    function flush() {
+      if (!Q.length) return;
+      const batch = Q.splice(0, 50);
+      fetch('/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(batch) }).catch(() => {});
+    }
+    function hook(level) {
+      const orig = console[level].bind(console);
+      console[level] = function(...args) {
+        orig(...args);
+        Q.push({ level, msg: args.map(a => {
+          try { return typeof a === 'object' ? JSON.stringify(a) : String(a); }
+          catch { return String(a); }
+        }).join(' ') });
+        clearTimeout(timer);
+        timer = setTimeout(flush, 300);
+      };
+    }
+    ['log','warn','error','info'].forEach(hook);
+    window.addEventListener('error', e => {
+      Q.push({ level: 'error', msg: e.message + ' at ' + e.filename + ':' + e.lineno });
+      flush();
+    });
+    window.addEventListener('unhandledrejection', e => {
+      Q.push({ level: 'error', msg: 'Unhandled rejection: ' + e.reason });
+      flush();
+    });
+  })();
+  </script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
+    }
+  }
+  </script>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, sans-serif; touch-action: none; }
+
+    #container { width: 100vw; height: 100vh; position: relative; overflow: hidden; }
+
+    /* --- Status banner --- */
+    #status {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      z-index: 10; color: #fff; font-size: 16px; text-align: center;
+      background: rgba(0,0,0,0.75); padding: 10px 24px; border-radius: 12px;
+      pointer-events: none; transition: opacity 0.3s;
+    }
+
+    /* --- HUD (HP bars) --- */
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      display: none; justify-content: space-between; padding: 50px 16px 0;
+      pointer-events: none;
+    }
+    .hp-wrap { width: 140px; }
+    .hp-label { color: #fff; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .hp-track { height: 10px; border-radius: 5px; background: rgba(255,255,255,0.15); overflow: hidden; }
+    .hp-fill { height: 100%; border-radius: 5px; transition: width 0.4s ease-out; }
+    .hp-fill.p1 { background: linear-gradient(90deg, #00ff88, #00cc66); }
+    .hp-fill.p2 { background: linear-gradient(90deg, #ff4444, #cc0000); }
+    .hp-num { color: #ccc; font-size: 10px; margin-top: 2px; text-align: center; font-variant-numeric: tabular-nums; }
+
+    /* --- Turn indicator --- */
+    #turn-msg {
+      position: fixed; top: 45%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 20; color: #fff; font-size: 30px; font-weight: 800;
+      text-shadow: 0 0 20px rgba(255,255,255,0.4); pointer-events: none;
+      opacity: 0; transition: opacity 0.25s;
+    }
+
+    /* --- Skill buttons --- */
+    #skills {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+      display: none; padding: 16px 12px 24px; gap: 10px; justify-content: center;
+    }
+    .skill-btn {
+      flex: 1; max-width: 110px; padding: 14px 6px; border: none; border-radius: 14px;
+      color: #fff; font-size: 13px; font-weight: 700; cursor: pointer;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5); transition: transform 0.1s, opacity 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .skill-btn:active { transform: scale(0.92); }
+    .skill-btn:disabled { opacity: 0.35; pointer-events: none; }
+    .skill-btn.fireball { background: linear-gradient(135deg, #ff6600, #ee2200); }
+    .skill-btn.ice      { background: linear-gradient(135deg, #0099ff, #0044cc); }
+    .skill-btn.ultimate  { background: linear-gradient(135deg, #ffbb00, #ff6600); box-shadow: 0 0 14px rgba(255,170,0,0.35); }
+    .skill-dmg { display: block; font-size: 10px; opacity: 0.8; margin-top: 3px; }
+
+    /* --- Game-over overlay --- */
+    #game-over {
+      position: fixed; inset: 0; z-index: 30; display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.85);
+    }
+    #game-over h1 { font-size: 44px; text-shadow: 0 0 30px rgba(255,170,0,0.6); }
+    #game-over p  { color: #ccc; font-size: 16px; margin-top: 8px; }
+
+    /* --- Screen flash --- */
+    #flash { position: fixed; inset: 0; z-index: 15; pointer-events: none; background: #fff; opacity: 0; transition: opacity 0.1s; }
+
+    /* --- Floating damage numbers --- */
+    .dmg-float {
+      position: fixed; z-index: 25; font-size: 26px; font-weight: 900;
+      text-shadow: 0 0 8px rgba(255,0,0,0.4); pointer-events: none;
+      animation: float-up 0.9s ease-out forwards;
+    }
+    @keyframes float-up {
+      0%   { opacity: 1; transform: translateY(0) scale(1); }
+      60%  { opacity: 1; transform: translateY(-40px) scale(1.1); }
+      100% { opacity: 0; transform: translateY(-65px) scale(0.8); }
+    }
+
+    /* --- FPS --- */
+    #fps {
+      position: fixed; bottom: 80px; right: 8px; z-index: 10;
+      color: #0f0; font-size: 11px; font-family: monospace; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="container"></div>
+
+<div id="status">Initializing camera...</div>
+
+<div id="hud">
+  <div class="hp-wrap">
+    <div class="hp-label">YOUR MONSTER</div>
+    <div class="hp-track"><div class="hp-fill p1" id="p1-fill" style="width:100%"></div></div>
+    <div class="hp-num" id="p1-num">100 / 100</div>
+  </div>
+  <div class="hp-wrap">
+    <div class="hp-label">ENEMY</div>
+    <div class="hp-track"><div class="hp-fill p2" id="p2-fill" style="width:100%"></div></div>
+    <div class="hp-num" id="p2-num">100 / 100</div>
+  </div>
+</div>
+
+<div id="turn-msg"></div>
+
+<div id="skills">
+  <button class="skill-btn fireball" data-skill="fireball">Fireball<span class="skill-dmg">30 DMG</span></button>
+  <button class="skill-btn ice" data-skill="ice">Ice Shard<span class="skill-dmg">20 DMG</span></button>
+  <button class="skill-btn ultimate" data-skill="ultimate">Ultimate<span class="skill-dmg">70 DMG</span></button>
+</div>
+
+<div id="game-over">
+  <h1 id="go-title">VICTORY!</h1>
+  <p id="go-sub">Your monster wins!</p>
+</div>
+
+<div id="flash"></div>
+<div id="fps"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { MindARThree } from 'mindar-image-three';
+
+/* ==========================================================
+   CONFIG
+   ========================================================== */
+const SKILLS = {
+  fireball: { damage: 30, color: 0xff4400, size: 0.08, duration: 500, flash: false, shake: false },
+  ice:      { damage: 20, color: 0x0099ff, size: 0.06, duration: 450, flash: false, shake: false },
+  ultimate: { damage: 70, color: 0xffaa00, size: 0.15, duration: 700, flash: true,  shake: true  },
+};
+
+const MAX_HP       = 100;
+const ENEMY_SKILL  = 'ice';
+const ENEMY_DELAY  = 1500;   // ms before enemy auto-fires
+
+/* ==========================================================
+   STATE
+   ========================================================== */
+let p1HP = MAX_HP, p2HP = MAX_HP;
+let playerTurn  = true;
+let started     = false;
+let over        = false;
+let busy        = false;       // animation lock
+let p1Tracked   = false;
+let p2Tracked   = false;
+
+const cachedPos = { p1: new THREE.Vector3(), p2: new THREE.Vector3() };
+
+/* ==========================================================
+   DOM
+   ========================================================== */
+const $ = (s) => document.querySelector(s);
+const statusEl = $('#status');
+const hudEl    = $('#hud');
+const skillsEl = $('#skills');
+const turnEl   = $('#turn-msg');
+const goEl     = $('#game-over');
+const flashEl  = $('#flash');
+const fpsEl    = $('#fps');
+
+/* ==========================================================
+   MINDAR + THREE SETUP
+   ========================================================== */
+const mindar = new MindARThree({
+  container: $('#container'),
+  imageTargetSrc: 'https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/band-example/band.mind',
+  maxTrack: 2,
+  filterMinCF: 1,
+  filterBeta: 10000,
+  missTolerance: 5,
+  warmupTolerance: 5,
+});
+
+const { renderer, scene, camera } = mindar;
+
+// Lighting
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
+const dLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dLight.position.set(0, 5, 5);
+scene.add(dLight);
+
+/* ==========================================================
+   MONSTER CREATION
+   ========================================================== */
+function makeMonster(color, emissive) {
+  const mat = new THREE.MeshStandardMaterial({
+    color, emissive, emissiveIntensity: 0.3, metalness: 0.3, roughness: 0.4,
+  });
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), mat);
+  mesh.position.y = 0.1;
+  mesh.userData = { origColor: color, origEmissive: emissive, alive: true };
+  return mesh;
+}
+
+const p1Mon = makeMonster(0xff3333, 0x440000);
+const p2Mon = makeMonster(0x3366ff, 0x000044);
+
+const a0 = mindar.addAnchor(0);
+const a1 = mindar.addAnchor(1);
+a0.group.add(p1Mon);
+a1.group.add(p2Mon);
+
+/* ==========================================================
+   TRACKING CALLBACKS
+   ========================================================== */
+a0.onTargetFound = () => { p1Tracked = true;  console.log('[TRACK] Card 1 FOUND'); onTrack(); };
+a0.onTargetLost  = () => { p1Tracked = false; console.log('[TRACK] Card 1 LOST');  onTrack(); };
+a1.onTargetFound = () => { p2Tracked = true;  console.log('[TRACK] Card 2 FOUND'); onTrack(); };
+a1.onTargetLost  = () => { p2Tracked = false; console.log('[TRACK] Card 2 LOST');  onTrack(); };
+
+function onTrack() {
+  if (p1Tracked && p2Tracked) {
+    cachePositions();
+    if (!started && !over) beginGame();
+  }
+  if (!started) {
+    if (!p1Tracked && !p2Tracked) statusEl.textContent = 'Point camera at both cards';
+    else if (p1Tracked && !p2Tracked) statusEl.textContent = 'Card 1 found — looking for Card 2...';
+    else if (!p1Tracked && p2Tracked) statusEl.textContent = 'Card 2 found — looking for Card 1...';
+  }
+}
+
+function cachePositions() {
+  a0.group.getWorldPosition(cachedPos.p1);
+  a1.group.getWorldPosition(cachedPos.p2);
+}
+
+/* ==========================================================
+   GAME START
+   ========================================================== */
+function beginGame() {
+  console.log('[GAME] Both cards tracked — FIGHT START');
+  started = true;
+  statusEl.style.opacity = '0';
+  hudEl.style.display = 'flex';
+  flash('FIGHT!', 1000, () => {
+    playerTurn = true;
+    setSkills(true);
+    flash('Your Turn', 800);
+  });
+}
+
+/* ==========================================================
+   UI HELPERS
+   ========================================================== */
+function syncHP() {
+  const pct1 = Math.max(0, p1HP / MAX_HP * 100);
+  const pct2 = Math.max(0, p2HP / MAX_HP * 100);
+  $('#p1-fill').style.width = pct1 + '%';
+  $('#p2-fill').style.width = pct2 + '%';
+  $('#p1-num').textContent = `${Math.max(0, p1HP)} / ${MAX_HP}`;
+  $('#p2-num').textContent = `${Math.max(0, p2HP)} / ${MAX_HP}`;
+}
+
+function setSkills(on) {
+  skillsEl.style.display = on ? 'flex' : 'none';
+  skillsEl.querySelectorAll('button').forEach(b => b.disabled = !on);
+}
+
+function flash(text, ms, cb) {
+  turnEl.textContent = text;
+  turnEl.style.opacity = '1';
+  setTimeout(() => {
+    turnEl.style.opacity = '0';
+    setTimeout(() => { if (cb) cb(); }, 260);
+  }, ms);
+}
+
+function dmgNumber(val, worldPos, color) {
+  const v = worldPos.clone().project(camera);
+  const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+  const el = document.createElement('div');
+  el.className = 'dmg-float';
+  el.textContent = `-${val}`;
+  el.style.cssText = `left:${x}px;top:${y}px;color:#${new THREE.Color(color).getHexString()}`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 950);
+}
+
+function screenFlash() {
+  flashEl.style.opacity = '0.5';
+  setTimeout(() => (flashEl.style.opacity = '0'), 120);
+}
+
+/* ==========================================================
+   PROJECTILE SYSTEM
+   ========================================================== */
+const projectiles = [];
+
+function spawnProjectile(from, to, cfg, onHit) {
+  const mat = new THREE.MeshBasicMaterial({ color: cfg.color });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(cfg.size, 12, 12), mat);
+  mesh.position.copy(from);
+  scene.add(mesh);
+
+  const glow = new THREE.PointLight(cfg.color, 2, 0.5);
+  mesh.add(glow);
+
+  projectiles.push({
+    mesh, glow, from: from.clone(), to: to.clone(),
+    t0: performance.now(), dur: cfg.duration,
+    color: cfg.color, size: cfg.size,
+    trails: [], onHit, dead: false,
+  });
+}
+
+function tickProjectiles(now) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    if (p.dead) continue;
+
+    const t = Math.min((now - p.t0) / p.dur, 1);
+    const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+    p.mesh.position.lerpVectors(p.from, p.to, ease);
+    p.mesh.scale.setScalar(1 + 0.2 * Math.sin(t * Math.PI * 8));
+
+    // trail
+    if (t < 0.9 && Math.random() < 0.6) {
+      const tm = new THREE.Mesh(
+        new THREE.SphereGeometry(p.size * 0.25, 6, 6),
+        new THREE.MeshBasicMaterial({ color: p.color, transparent: true, opacity: 0.5 })
+      );
+      tm.position.copy(p.mesh.position);
+      scene.add(tm);
+      p.trails.push({ m: tm, born: now });
+    }
+
+    // fade trails
+    for (let j = p.trails.length - 1; j >= 0; j--) {
+      const age = (now - p.trails[j].born) / 250;
+      if (age >= 1) { dispose(p.trails[j].m); p.trails.splice(j, 1); }
+      else { p.trails[j].m.material.opacity = 0.5 * (1 - age); p.trails[j].m.scale.setScalar(1 - age * 0.6); }
+    }
+
+    // arrive
+    if (t >= 1) {
+      dispose(p.mesh);
+      p.trails.forEach(tr => dispose(tr.m));
+      p.dead = true;
+      projectiles.splice(i, 1);
+      if (p.onHit) p.onHit();
+    }
+  }
+}
+
+function dispose(mesh) {
+  scene.remove(mesh);
+  mesh.geometry?.dispose();
+  if (mesh.material) mesh.material.dispose?.();
+}
+
+/* ==========================================================
+   ANIMATIONS
+   ========================================================== */
+function animCast(mon) {
+  return new Promise(r => {
+    const s0 = mon.scale.clone();
+    const t0 = performance.now();
+    (function tick() {
+      const t = (performance.now() - t0) / 280;
+      if (t >= 1) { mon.scale.copy(s0); return r(); }
+      const s = 1 + 0.35 * Math.sin(t * Math.PI);
+      mon.scale.set(s0.x * s, s0.y * s, s0.z * s);
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+
+function animHit(mon) {
+  return new Promise(r => {
+    const { origColor, origEmissive } = mon.userData;
+    mon.material.color.set(0xff0000);
+    mon.material.emissive.set(0xff0000);
+    mon.material.emissiveIntensity = 1;
+    const p0 = mon.position.clone();
+    const t0 = performance.now();
+    (function tick() {
+      const t = (performance.now() - t0) / 350;
+      if (t >= 1) {
+        mon.material.color.set(origColor);
+        mon.material.emissive.set(origEmissive);
+        mon.material.emissiveIntensity = 0.3;
+        mon.position.copy(p0);
+        return r();
+      }
+      mon.position.x = p0.x + (Math.random() - 0.5) * 0.02;
+      mon.position.z = p0.z + (Math.random() - 0.5) * 0.02;
+      if (t > 0.5) {
+        const f = (t - 0.5) / 0.5;
+        mon.material.emissiveIntensity = 1 - f * 0.7;
+      }
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+
+function animDeath(mon) {
+  return new Promise(r => {
+    mon.userData.alive = false;
+    const bits = [];
+    for (let i = 0; i < 20; i++) {
+      const m = new THREE.Mesh(
+        new THREE.SphereGeometry(0.015, 6, 6),
+        new THREE.MeshBasicMaterial({ color: mon.material.color.getHex(), transparent: true, opacity: 1 })
+      );
+      m.position.copy(mon.position);
+      mon.parent.add(m);
+      bits.push({
+        m,
+        v: new THREE.Vector3((Math.random() - 0.5) * 0.5, Math.random() * 0.35, (Math.random() - 0.5) * 0.5),
+      });
+    }
+    const t0 = performance.now();
+    (function tick() {
+      const t = (performance.now() - t0) / 750;
+      if (t >= 1) {
+        mon.scale.set(0, 0, 0);
+        bits.forEach(b => dispose(b.m));
+        return r();
+      }
+      mon.scale.setScalar(1 - t);
+      mon.rotation.y += 0.12;
+      bits.forEach(b => {
+        b.m.position.addScaledVector(b.v, 0.016);
+        b.v.y -= 0.006;
+        b.m.material.opacity = 1 - t;
+      });
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+
+/* ==========================================================
+   COMBAT
+   ========================================================== */
+async function attack(skillKey, isP1) {
+  if (busy || over) return;
+  busy = true;
+  setSkills(false);
+  console.log(`[COMBAT] ${isP1 ? 'P1' : 'P2'} uses ${skillKey.toUpperCase()} (${SKILLS[skillKey].damage} dmg)`);
+
+  const cfg  = SKILLS[skillKey];
+  const atkr = isP1 ? p1Mon : p2Mon;
+  const defr = isP1 ? p2Mon : p1Mon;
+  const from = (isP1 ? cachedPos.p1 : cachedPos.p2).clone();
+  const to   = (isP1 ? cachedPos.p2 : cachedPos.p1).clone();
+  from.y += 0.1;
+  to.y   += 0.1;
+
+  await animCast(atkr);
+
+  await new Promise(done => {
+    spawnProjectile(from, to, cfg, async () => {
+      if (cfg.flash) screenFlash();
+
+      if (isP1) p2HP -= cfg.damage; else p1HP -= cfg.damage;
+      console.log(`[HP] P1: ${p1HP}/${MAX_HP} | P2: ${p2HP}/${MAX_HP}`);
+      syncHP();
+      dmgNumber(cfg.damage, to, cfg.color);
+
+      const dead = isP1 ? p2HP <= 0 : p1HP <= 0;
+      if (dead) {
+        console.log(`[GAME] ${isP1 ? 'P2' : 'P1'} DEFEATED — ${isP1 ? 'VICTORY' : 'DEFEAT'}`);
+        await animDeath(defr);
+        over = true;
+        $('#go-title').textContent = isP1 ? 'VICTORY!' : 'DEFEAT!';
+        $('#go-title').style.color = isP1 ? '#ffaa00' : '#ff4444';
+        $('#go-sub').textContent   = isP1 ? 'Your monster wins!' : 'Enemy monster wins...';
+        goEl.style.display = 'flex';
+      } else {
+        await animHit(defr);
+      }
+      done();
+    });
+  });
+
+  busy = false;
+  if (over) return;
+
+  if (isP1) {
+    playerTurn = false;
+    flash('Enemy Turn', 800, () => setTimeout(() => attack(ENEMY_SKILL, false), ENEMY_DELAY));
+  } else {
+    playerTurn = true;
+    flash('Your Turn', 800, () => setSkills(true));
+  }
+}
+
+/* ==========================================================
+   SKILL BUTTONS
+   ========================================================== */
+document.querySelectorAll('.skill-btn').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.preventDefault();
+    if (playerTurn && !busy && !over) attack(btn.dataset.skill, true);
+  });
+});
+
+/* ==========================================================
+   IDLE BOB
+   ========================================================== */
+function bob(mon, t) {
+  if (!mon.userData.alive) return;
+  mon.position.y = 0.1 + Math.sin(t * 2) * 0.008;
+  mon.rotation.y += 0.004;
+}
+
+/* ==========================================================
+   FPS + DEBUG SHORTCUT (tap FPS counter 3x to instant-kill enemy)
+   ========================================================== */
+let frames = 0, lastFps = performance.now();
+let debugTaps = 0, debugTimer = null;
+fpsEl.style.pointerEvents = 'auto';
+fpsEl.addEventListener('click', () => {
+  debugTaps++;
+  clearTimeout(debugTimer);
+  debugTimer = setTimeout(() => (debugTaps = 0), 800);
+  if (debugTaps >= 3 && started && !over) {
+    console.log('[DEBUG] Instant kill triggered');
+    debugTaps = 0;
+    p2HP = 0;
+    syncHP();
+    animDeath(p2Mon).then(() => {
+      over = true;
+      $('#go-title').textContent = 'VICTORY!';
+      $('#go-title').style.color = '#ffaa00';
+      $('#go-sub').textContent = 'DEBUG: instant kill';
+      goEl.style.display = 'flex';
+    });
+  }
+});
+
+/* ==========================================================
+   LIVE RELOAD (polls server for file changes)
+   ========================================================== */
+(function liveReload() {
+  let lastMod = null;
+  setInterval(async () => {
+    try {
+      const res = await fetch('/index.html', { method: 'HEAD' });
+      const mod = res.headers.get('last-modified');
+      if (lastMod && mod !== lastMod) location.reload();
+      lastMod = mod;
+    } catch {}
+  }, 1500);
+})();
+
+/* ==========================================================
+   MAIN LOOP
+   ========================================================== */
+async function init() {
+  try {
+    console.log('[INIT] Starting MindAR...');
+    statusEl.textContent = 'Starting camera...';
+    await mindar.start();
+    console.log('[INIT] MindAR started, camera active');
+    statusEl.textContent = 'Point camera at both cards';
+
+    renderer.setAnimationLoop(() => {
+      const now = performance.now();
+
+      tickProjectiles(now);
+      bob(p1Mon, now / 1000);
+      bob(p2Mon, now / 1000);
+
+      if (p1Tracked && p2Tracked && started) cachePositions();
+
+      frames++;
+      if (now - lastFps >= 1000) {
+        fpsEl.textContent = frames + ' FPS';
+        frames = 0;
+        lastFps = now;
+      }
+
+      renderer.render(scene, camera);
+    });
+  } catch (err) {
+    console.error('MindAR error:', err);
+    statusEl.textContent = 'Camera error: ' + (err?.message || 'Camera permission denied. Reload and allow access.');
+  }
+}
+
+init();
+</script>
+</body>
+</html>

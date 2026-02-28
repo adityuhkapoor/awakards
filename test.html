@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Awakards — Monster Generator Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; min-height: 100vh; }
+
+    h1 { font-size: 20px; text-align: center; margin-bottom: 16px; color: #ffaa00; }
+    .subtitle { text-align: center; color: #888; font-size: 13px; margin-bottom: 24px; }
+
+    .capture-area { text-align: center; margin-bottom: 20px; }
+    .capture-btn {
+      background: linear-gradient(135deg, #ffaa00, #ff6600); border: none; color: #fff;
+      font-size: 16px; font-weight: 700; padding: 16px 32px; border-radius: 14px; cursor: pointer;
+    }
+    .capture-btn:active { transform: scale(0.95); }
+    #file-input { display: none; }
+
+    #preview { max-width: 200px; max-height: 200px; border-radius: 12px; display: none; margin: 12px auto; border: 2px solid #333; }
+    #status { text-align: center; font-size: 14px; color: #aaa; margin: 16px 0; min-height: 20px; }
+
+    #result { display: none; background: #1a1a1a; border-radius: 16px; padding: 20px; margin-top: 16px; border: 1px solid #333; }
+    .monster-header { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
+    #portrait { width: 120px; height: 120px; border-radius: 12px; object-fit: cover; background: #222; display: none; }
+    #portrait-loading { width: 120px; height: 120px; border-radius: 12px; background: #222; display: flex; align-items: center; justify-content: center; color: #555; font-size: 11px; }
+    .monster-info { flex: 1; }
+    .monster-name { font-size: 22px; font-weight: 800; color: #ffaa00; }
+    .monster-type { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+    .monster-desc { font-size: 12px; color: #aaa; margin-top: 8px; line-height: 1.4; }
+
+    .skills-title { font-size: 13px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+    .skill { background: #222; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+    .skill-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .skill-content { flex: 1; }
+    .skill-name { font-size: 14px; font-weight: 700; }
+    .skill-desc { font-size: 11px; color: #888; margin-top: 2px; }
+    .skill.ultimate { border: 1px solid #ffaa0044; }
+
+    #timing { text-align: center; margin-top: 12px; font-size: 12px; color: #666; }
+    #json-toggle { display: block; margin: 12px auto 0; background: none; border: 1px solid #333; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+    #json-raw { display: none; background: #0a0a0a; border-radius: 8px; padding: 12px; margin-top: 10px; font-size: 11px; font-family: monospace; color: #6f6; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+
+<h1>Awakards Monster Generator</h1>
+<p class="subtitle">Take a photo of anything. Gemini turns it into a monster.</p>
+
+<div class="capture-area">
+  <button class="capture-btn" id="capture-btn">Take Photo</button>
+  <input type="file" id="file-input" accept="image/*" capture="environment">
+</div>
+
+<img id="preview">
+<div id="status"></div>
+
+<div id="result">
+  <div class="monster-header">
+    <div id="portrait-loading">Generating...</div>
+    <img id="portrait">
+    <div class="monster-info">
+      <div class="monster-name" id="m-name"></div>
+      <div class="monster-type" id="m-type"></div>
+      <div class="monster-desc" id="m-desc"></div>
+    </div>
+  </div>
+  <div class="skills-title">Skills</div>
+  <div id="skills-list"></div>
+  <div id="timing"></div>
+  <button id="json-toggle">Show raw JSON</button>
+  <pre id="json-raw"></pre>
+</div>
+
+<script>
+const fileInput = document.getElementById('file-input');
+const preview = document.getElementById('preview');
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+const portraitEl = document.getElementById('portrait');
+const portraitLoading = document.getElementById('portrait-loading');
+
+document.getElementById('capture-btn').addEventListener('click', () => fileInput.click());
+
+function makeSkillEl(sk, isUltimate) {
+  const div = document.createElement('div');
+  div.className = 'skill' + (isUltimate ? ' ultimate' : '');
+
+  const dot = document.createElement('div');
+  dot.className = 'skill-dot';
+  dot.style.background = sk.color || '#888';
+
+  const content = document.createElement('div');
+  content.className = 'skill-content';
+
+  const name = document.createElement('div');
+  name.className = 'skill-name';
+  name.textContent = (sk.name || '?') + (isUltimate ? ' (Ultimate)' : '');
+
+  const desc = document.createElement('div');
+  desc.className = 'skill-desc';
+  desc.textContent = sk.description || '';
+
+  content.appendChild(name);
+  content.appendChild(desc);
+  div.appendChild(dot);
+  div.appendChild(content);
+  return div;
+}
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  // Show preview
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    preview.src = ev.target.result;
+    preview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+
+  // Convert to base64
+  const b64 = await new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(',')[1]);
+    r.readAsDataURL(file);
+  });
+  const mime = file.type || 'image/jpeg';
+
+  // Reset UI
+  resultEl.style.display = 'none';
+  portraitEl.style.display = 'none';
+  portraitLoading.style.display = 'flex';
+  portraitLoading.textContent = 'Generating...';
+  document.getElementById('json-raw').style.display = 'none';
+
+  // Step 1: Gemini
+  statusEl.textContent = 'Gemini is analyzing your image...';
+  const t0 = performance.now();
+
+  let monster;
+  try {
+    const res = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: b64, mime }),
+    });
+    if (!res.ok) throw new Error('Gemini API error: ' + res.status);
+    monster = await res.json();
+    if (monster.error) throw new Error(monster.error);
+  } catch (err) {
+    statusEl.textContent = 'Gemini error: ' + err.message;
+    return;
+  }
+
+  const geminiTime = ((performance.now() - t0) / 1000).toFixed(1);
+  statusEl.textContent = 'Generating monster portrait...';
+
+  // Show Gemini results immediately
+  resultEl.style.display = 'block';
+  document.getElementById('m-name').textContent = monster.name || 'Unknown';
+  document.getElementById('m-type').textContent = (monster.type || 'unknown') + ' type';
+  document.getElementById('m-desc').textContent = monster.description || '';
+
+  const skillsList = document.getElementById('skills-list');
+  skillsList.replaceChildren();
+  (monster.skills || []).forEach((sk, i) => {
+    skillsList.appendChild(makeSkillEl(sk, i === 2));
+  });
+
+  document.getElementById('json-raw').textContent = JSON.stringify(monster, null, 2);
+
+  // Step 2: Imagen
+  const t1 = performance.now();
+  try {
+    const res = await fetch('/api/imagen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: monster.description, type: monster.type }),
+    });
+    if (!res.ok) throw new Error('Imagen API error: ' + res.status);
+    const imgData = await res.json();
+    if (imgData.error) throw new Error(imgData.error);
+    portraitEl.src = 'data:image/png;base64,' + imgData.image;
+    portraitEl.style.display = 'block';
+    portraitLoading.style.display = 'none';
+  } catch (err) {
+    portraitLoading.textContent = 'Art failed';
+    console.error('Imagen error:', err);
+  }
+
+  const imagenTime = ((performance.now() - t1) / 1000).toFixed(1);
+  const totalTime = ((performance.now() - t0) / 1000).toFixed(1);
+
+  statusEl.textContent = 'Done!';
+  document.getElementById('timing').textContent = 'Gemini: ' + geminiTime + 's | Imagen: ' + imagenTime + 's | Total: ' + totalTime + 's';
+
+  fileInput.value = '';
+});
+
+document.getElementById('json-toggle').addEventListener('click', () => {
+  const raw = document.getElementById('json-raw');
+  raw.style.display = raw.style.display === 'none' ? 'block' : 'none';
+});
+</script>
+</body>
+</html>
